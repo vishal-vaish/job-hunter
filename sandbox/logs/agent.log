@@ -1,0 +1,140 @@
+[2026-09-23 11:37:13] [INFO] [agent.profile_validator] Candidate profile validated successfully: roles=['Python Developer', 'Backend Engineer'], experience=3y, skills=5
+[2026-09-23 11:41:49] [INFO] [agent.profile_validator] Candidate profile validated successfully: roles=['Python Developer', 'Backend Engineer'], experience=3y, skills=5
+[2026-09-23 11:43:18] [INFO] [agent.profile_validator] Candidate profile validated successfully: roles=['Python Developer', 'Backend Engineer'], experience=3y, skills=5
+[2026-09-23 11:44:14] [INFO] [agent.profile_validator] Candidate profile validated successfully: roles=['Python Developer', 'Backend Engineer'], experience=3y, skills=5
+[2026-09-23 11:47:04] [INFO] [agent.profile_validator] Candidate profile validated successfully: roles=['Python Developer', 'Backend Engineer'], experience=3y, skills=5
+[2026-09-23 11:47:33] [INFO] [agent.profile_validator] Candidate profile validated successfully: roles=['Python Developer', 'Backend Engineer'], experience=3y, skills=5
+[2026-09-23 11:49:19] [INFO] [mod1] Hello from mod1
+[2026-09-23 11:49:19] [INFO] [mod2] Hello from mod2
+[2026-09-23 11:50:32] [INFO] [main] =================================================================
+[2026-09-23 11:50:32] [INFO] [main]              AUTONOMOUS JOB HUNTER - STARTING                    
+[2026-09-23 11:50:32] [INFO] [main] =================================================================
+[2026-09-23 11:50:32] [INFO] [main] Verifying local infrastructure status...
+[2026-09-23 11:50:34] [INFO] [main] Ollama is reachable at http://localhost:11434 (Model: llama3.1:8b)
+[2026-09-23 11:50:34] [INFO] [main] SearXNG is reachable at http://localhost:8081
+[2026-09-23 11:50:34] [INFO] [main] Loading candidate profile from sandbox/input/candidate.json...
+[2026-09-23 11:50:34] [INFO] [agent.profile_validator] Candidate profile validated successfully: roles=['Python Developer', 'Backend Engineer'], experience=3y, skills=5
+[2026-09-23 11:50:34] [INFO] [main] Candidate loaded: Target Roles=['Python Developer', 'Backend Engineer'], Skills=['Python', 'FastAPI', 'Django', 'PostgreSQL', 'Docker'], Experience=3y
+[2026-09-23 11:50:34] [INFO] [main] Generating Search Mission from candidate profile...
+[2026-09-23 11:50:34] [INFO] [agent.mission_generator] Generating search mission for roles: ['Python Developer', 'Backend Engineer']
+[2026-09-23 11:50:41] [INFO] [agent.mission_generator] Mission generated successfully via LLM: objective='Find suitable job openings for a Python Developer/Backend Engineer'
+[2026-09-23 11:50:41] [INFO] [main] Mission generated: Objective='Find suitable job openings for a Python Developer/Backend Engineer'
+[2026-09-23 11:50:41] [INFO] [main] Mission Parameters: Target=5 jobs | Max Iterations=1
+[2026-09-23 11:50:41] [INFO] [storage.memory] Loaded existing agent memory from sandbox/memory/agent_memory.json
+[2026-09-23 11:50:41] [INFO] [agent.brain] === Starting Autonomous Brain Loop | Objective: 'Find suitable job openings for a Python Developer/Backend Engineer' ===
+[2026-09-23 11:50:41] [INFO] [agent.brain] [OBSERVE] Iteration 0/1 | Accepted: 0/5 (0.0%)
+[2026-09-23 11:50:41] [INFO] [agent.brain] [DIAGNOSE] Initial cycle: Establish baseline search using primary role and high-priority skills.
+[2026-09-23 11:50:46] [INFO] [agent.brain] [DECIDE] Decision: Search with query 'site:linkedin.com/jobs/view 'Backend Engineer' Delhi Python PostgreSQL Docker' | Rationale: Adapted from previous queries, broadened location to include Noida and Gurgaon, added seniority marker 'Senior' to match experience (3 years), and changed role title to 'Backend Engineer' with high-priority skills 'Python', 'PostgreSQL', and 'Docker'.
+[2026-09-23 11:50:46] [INFO] [agent.brain] [ACT] Executing search query: 'site:linkedin.com/jobs/view 'Backend Engineer' Delhi Python PostgreSQL Docker'
+[2026-09-23 11:50:46] [INFO] [agent.tools.search_jobs] [TOOL:search_jobs] Executing query: 'site:linkedin.com/jobs/view 'Backend Engineer' Delhi Python PostgreSQL Docker' (page 1)
+[2026-09-23 11:50:46] [INFO] [search.global_search] Executing GlobalSearch: 'site:linkedin.com/jobs/view 'Backend Engineer' Delhi Python PostgreSQL Docker' | Allowed providers: ['linkedin']
+[2026-09-23 11:50:46] [INFO] [infrastructure.searxng] Querying SearXNG: 'site:linkedin.com/jobs/view 'Backend Engineer' Delhi Python PostgreSQL Docker' (page 1)
+[2026-09-23 11:50:48] [INFO] [infrastructure.searxng] SearXNG returned 50 results for query: 'site:linkedin.com/jobs/view 'Backend Engineer' Delhi Python PostgreSQL Docker'
+[2026-09-23 11:50:48] [INFO] [search.global_search] GlobalSearch successfully extracted 40 jobs from 50 raw results.
+[2026-09-23 11:50:48] [INFO] [pipeline.deduplicator] Deduplication complete: 25 unique jobs kept, 15 duplicates removed.
+[2026-09-23 11:50:48] [INFO] [pipeline.filters] Hard filter rejected job 'Backend intern' (https://linkedin.com/jobs/view/2674480623): Location 'Bengaluru, Karnataka, India' does not match target locations ['Delhi', 'Noida', 'Gurgaon']
+[2026-09-23 11:50:48] [INFO] [pipeline.filters] Hard filter rejected job 'Back End Developer' (https://linkedin.com/jobs/view/3840199054): Location 'India' does not match target locations ['Delhi', 'Noida', 'Gurgaon']
+[2026-09-23 11:50:48] [INFO] [pipeline.filters] Hard filter rejected job 'Full stack Engineer -Django, Python and PostgreSQL' (https://linkedin.com/jobs/view/4373634108): Location 'United States' does not match target locations ['Delhi', 'Noida', 'Gurgaon']
+[2026-09-23 11:50:48] [INFO] [pipeline.filters] Hard filter rejected job 'Python Developer' (https://linkedin.com/jobs/view/4467165459): Location 'India' does not match target locations ['Delhi', 'Noida', 'Gurgaon']
+[2026-09-23 11:50:48] [INFO] [pipeline.filters] Hard filters: 21 jobs passed, 4 rejected.
+[2026-09-23 11:50:48] [INFO] [agent.evaluator] Evaluating job 'Python Backend Consultant (Data Engineering & Data Pipelines)' at 'Unknown' (Threshold: 70)
+[2026-09-23 11:50:52] [INFO] [agent.evaluator] Evaluation result for 'Python Backend Consultant (Data Engineering & Data Pipelines)': score=85, suitable=True
+[2026-09-23 11:50:52] [INFO] [agent.brain] [ACT] Job ACCEPTED: 'Python Backend Consultant (Data Engineering & Data Pipelines)' at 'Unknown' (Score: 85)
+[2026-09-23 11:50:52] [INFO] [agent.evaluator] Evaluating job 'Senior Backend Engineer – Golang & Python | Immediate Joiner' at 'Unknown' (Threshold: 70)
+[2026-09-23 11:50:56] [INFO] [agent.evaluator] Evaluation result for 'Senior Backend Engineer – Golang & Python | Immediate Joiner': score=85, suitable=True
+[2026-09-23 11:50:56] [INFO] [agent.brain] [ACT] Job ACCEPTED: 'Senior Backend Engineer – Golang & Python | Immediate Joiner' at 'Unknown' (Score: 85)
+[2026-09-23 11:50:56] [INFO] [agent.evaluator] Evaluating job 'Backend Developer (Python / Node.js / NestJS / PostgreSQL)' at 'Unknown' (Threshold: 70)
+[2026-09-23 11:51:00] [INFO] [agent.evaluator] Evaluation result for 'Backend Developer (Python / Node.js / NestJS / PostgreSQL)': score=80, suitable=True
+[2026-09-23 11:51:00] [INFO] [agent.brain] [ACT] Job ACCEPTED: 'Backend Developer (Python / Node.js / NestJS / PostgreSQL)' at 'Unknown' (Score: 80)
+[2026-09-23 11:51:00] [INFO] [agent.evaluator] Evaluating job 'Backend & Frontend Developer (Python / FastAPI / AI )' at 'Unknown' (Threshold: 70)
+[2026-09-23 11:51:04] [INFO] [agent.evaluator] Evaluation result for 'Backend & Frontend Developer (Python / FastAPI / AI )': score=80, suitable=True
+[2026-09-23 11:51:04] [INFO] [agent.brain] [ACT] Job ACCEPTED: 'Backend & Frontend Developer (Python / FastAPI / AI )' at 'Unknown' (Score: 80)
+[2026-09-23 11:51:04] [INFO] [agent.evaluator] Evaluating job 'senior staff backend engineer with python,sql,snowfalke,docker ...' at 'Unknown' (Threshold: 70)
+[2026-09-23 11:51:08] [INFO] [agent.evaluator] Evaluation result for 'senior staff backend engineer with python,sql,snowfalke,docker ...': score=85, suitable=True
+[2026-09-23 11:51:08] [INFO] [agent.brain] [ACT] Job ACCEPTED: 'senior staff backend engineer with python,sql,snowfalke,docker ...' at 'Unknown' (Score: 85)
+[2026-09-23 11:51:08] [INFO] [agent.brain] [ACT] Target job count of 5 reached during evaluation batch.
+[2026-09-23 11:51:08] [INFO] [agent.tools.memory] [TOOL:memory] Saved agent memory state to sandbox.
+[2026-09-23 11:51:08] [INFO] [agent.brain] [REFLECT] Finished cycle 1. Cumulative accepted jobs: 5/5
+[2026-09-23 11:51:08] [INFO] [agent.brain] === Target job count satisfied (5 accepted) ===
+[2026-09-23 11:51:08] [INFO] [agent.tools.results] [TOOL:results] Persisting 5 accepted jobs to output/jobs.json
+[2026-09-23 11:51:08] [INFO] [agent.tools.results] [TOOL:results] Successfully saved output to E:\vishal\job-hunter\sandbox\output\jobs.json
+[2026-09-23 11:51:08] [INFO] [agent.brain] === Autonomous Brain completed. Results stored at: E:\vishal\job-hunter\sandbox\output\jobs.json ===
+[2026-09-23 11:51:08] [INFO] [main] =================================================================
+[2026-09-23 11:51:08] [INFO] [main]              JOB SEARCH MISSION COMPLETED                        
+[2026-09-23 11:51:08] [INFO] [main] =================================================================
+[2026-09-23 11:51:08] [INFO] [main] Total Accepted Jobs: 5/5
+[2026-09-23 11:51:08] [INFO] [main]   1. [Unknown] Python Backend Consultant (Data Engineering & Data Pipelines) (Unknown) - Score: 85
+[2026-09-23 11:51:08] [INFO] [main]      URL: https://linkedin.com/jobs/view/4470412985
+[2026-09-23 11:51:08] [INFO] [main]   2. [Unknown] Senior Backend Engineer – Golang & Python | Immediate Joiner (Unknown) - Score: 85
+[2026-09-23 11:51:08] [INFO] [main]      URL: https://linkedin.com/jobs/view/4463835211
+[2026-09-23 11:51:08] [INFO] [main]   3. [Unknown] Backend Developer (Python / Node.js / NestJS / PostgreSQL) (Unknown) - Score: 80
+[2026-09-23 11:51:08] [INFO] [main]      URL: https://linkedin.com/jobs/view/4394400854
+[2026-09-23 11:51:08] [INFO] [main]   4. [Unknown] Backend & Frontend Developer (Python / FastAPI / AI ) (Unknown) - Score: 80
+[2026-09-23 11:51:08] [INFO] [main]      URL: https://linkedin.com/jobs/view/4397823570
+[2026-09-23 11:51:08] [INFO] [main]   5. [Unknown] senior staff backend engineer with python,sql,snowfalke,docker ... (Unknown) - Score: 85
+[2026-09-23 11:51:08] [INFO] [main]      URL: https://linkedin.com/jobs/view/4462921132
+[2026-09-23 11:51:08] [INFO] [main] 
+Results saved to: sandbox/output/jobs.json
+[2026-09-23 11:51:08] [INFO] [main] Search memory saved to: sandbox/memory/agent_memory.json
+[2026-09-23 11:51:08] [INFO] [main] Execution log saved to: sandbox/logs/agent.log
+[2026-09-23 12:08:10] [INFO] [search.global_search] Executing GlobalSearch: 'site:linkedin.com/jobs/view python developer' | Allowed providers: ['linkedin']
+[2026-09-23 12:08:10] [INFO] [infrastructure.searxng] Querying SearXNG: 'site:linkedin.com/jobs/view python developer' (page 1)
+[2026-09-23 12:08:12] [INFO] [infrastructure.searxng] SearXNG returned 49 results for query: 'site:linkedin.com/jobs/view python developer'
+[2026-09-23 12:08:12] [INFO] [search.global_search] GlobalSearch successfully extracted 40 jobs from 49 raw results.
+[2026-09-23 12:15:03] [INFO] [pipeline.availability] [AVAILABILITY] Job 'Python Developer (No longer accepting applications)' marked CLOSED from search snippet metadata.
+[2026-09-23 12:15:50] [INFO] [pipeline.availability] [AVAILABILITY] Job 'Python Developer (No longer accepting applications)' marked CLOSED from search snippet metadata.
+[2026-09-23 12:17:16] [INFO] [main] =================================================================
+[2026-09-23 12:17:16] [INFO] [main]              AUTONOMOUS JOB HUNTER - STARTING                    
+[2026-09-23 12:17:16] [INFO] [main] =================================================================
+[2026-09-23 12:17:16] [INFO] [main] Verifying local infrastructure status...
+[2026-09-23 12:17:18] [INFO] [main] Ollama is reachable at http://localhost:11434 (Model: llama3.1:8b)
+[2026-09-23 12:17:18] [INFO] [main] SearXNG is reachable at http://localhost:8081
+[2026-09-23 12:17:18] [INFO] [main] Loading candidate profile from sandbox/input/candidate.json...
+[2026-09-23 12:17:18] [INFO] [agent.profile_validator] Candidate profile validated successfully: roles=['Python Developer', 'Backend Engineer'], experience=3y, skills=5
+[2026-09-23 12:17:18] [INFO] [main] Candidate loaded: Target Roles=['Python Developer', 'Backend Engineer'], Skills=['Python', 'FastAPI', 'Django', 'PostgreSQL', 'Docker'], Experience=3y, Max Posting Age=7d
+[2026-09-23 12:17:18] [INFO] [main] Generating Search Mission from candidate profile...
+[2026-09-23 12:17:18] [INFO] [agent.mission_generator] Generating search mission for roles: ['Python Developer', 'Backend Engineer']
+[2026-09-23 12:17:47] [INFO] [agent.mission_generator] Mission generated successfully via LLM: objective='Find relevant job openings for a Python Developer/Backend Engineer' | max_age=7d
+[2026-09-23 12:17:47] [INFO] [main] Mission generated: Objective='Find relevant job openings for a Python Developer/Backend Engineer'
+[2026-09-23 12:17:47] [INFO] [main] Mission Parameters: Target=5 jobs | Max Age=7d | Max Iterations=1
+[2026-09-23 12:17:47] [INFO] [storage.memory] Loaded existing agent memory from sandbox/memory/agent_memory.json
+[2026-09-23 12:17:47] [INFO] [agent.brain] === Starting Autonomous Brain Loop | Objective: 'Find relevant job openings for a Python Developer/Backend Engineer' | Max Age: 7d ===
+[2026-09-23 12:17:47] [INFO] [agent.brain] [OBSERVE] Iteration 0/1 | Accepted: 0/5 (0.0%) | Max Age: 7d
+[2026-09-23 12:17:47] [INFO] [agent.brain] [DIAGNOSE] Initial cycle: Establish baseline search using primary role and core skills targeting jobs posted within 7 days.
+[2026-09-23 12:17:54] [INFO] [agent.brain] [DECIDE] Decision: Search with query 'site:linkedin.com/jobs/view 'Backend Engineer' Delhi PostgreSQL FastAPI' | Rationale: Adapted from previous queries, broadened keyword scope to include both primary role (Backend Engineer) and core skills (PostgreSQL, FastAPI), while maintaining location specificity and adhering to the hard freshness constraint of 7 days. This query aims to capture relevant job postings that may not have been captured by previous searches, given the diagnosis of a low yield from initial queries.
+[2026-09-23 12:17:54] [INFO] [agent.brain] [ACT] Executing search query: 'site:linkedin.com/jobs/view 'Backend Engineer' Delhi PostgreSQL FastAPI'
+[2026-09-23 12:17:54] [INFO] [agent.tools.search_jobs] [TOOL:search_jobs] Executing query: 'site:linkedin.com/jobs/view 'Backend Engineer' Delhi PostgreSQL FastAPI' (page 1)
+[2026-09-23 12:17:54] [INFO] [search.global_search] Executing GlobalSearch: 'site:linkedin.com/jobs/view 'Backend Engineer' Delhi PostgreSQL FastAPI' | Allowed providers: ['linkedin']
+[2026-09-23 12:17:54] [INFO] [infrastructure.searxng] Querying SearXNG: 'site:linkedin.com/jobs/view 'Backend Engineer' Delhi PostgreSQL FastAPI' (page 1)
+[2026-09-23 12:17:56] [INFO] [infrastructure.searxng] SearXNG returned 30 results for query: 'site:linkedin.com/jobs/view 'Backend Engineer' Delhi PostgreSQL FastAPI'
+[2026-09-23 12:17:56] [INFO] [search.global_search] GlobalSearch successfully extracted 20 jobs from 30 raw results.
+[2026-09-23 12:17:56] [INFO] [pipeline.deduplicator] Deduplication complete: 12 unique jobs kept, 8 duplicates removed.
+[2026-09-23 12:17:56] [INFO] [agent.brain] [ACT] Freshness filter rejected 'Backend/Full-Stack Engineer Large-Scale SaaS-ERP' (https://linkedin.com/jobs/view/4466818716): Posting age (8d) exceeds maximum allowed (7d)
+[2026-09-23 12:17:56] [INFO] [agent.brain] [ACT] Freshness filter rejected 'Back End Developer at Netrolynx AI — India' (https://linkedin.com/jobs/view/4467423108): Unknown posting age (rejected by default)
+[2026-09-23 12:17:56] [INFO] [agent.brain] [ACT] Freshness filter rejected 'Senior Full-Stack Engineer — Next.js + FastAPI' (https://linkedin.com/jobs/view/4463962334): Unknown posting age (rejected by default)
+[2026-09-23 12:17:56] [INFO] [agent.brain] [ACT] Freshness filter rejected 'Python Backend Developer (Remote)' (https://linkedin.com/jobs/view/4466444566): Unknown posting age (rejected by default)
+[2026-09-23 12:17:56] [INFO] [agent.brain] [ACT] Freshness filter rejected 'RL GYM – Python / FastAPI Backend Developer 4 years' (https://linkedin.com/jobs/view/4327937272): Unknown posting age (rejected by default)
+[2026-09-23 12:17:56] [INFO] [agent.brain] [ACT] Freshness filter rejected 'Technical Lead – Backend (Python / Fast API/ Azure)' (https://linkedin.com/jobs/view/4460047767): Unknown posting age (rejected by default)
+[2026-09-23 12:17:56] [INFO] [agent.brain] [ACT] Freshness filter rejected 'Full Stack Engineering Intern (Python / FastAPI / Next.js)' (https://linkedin.com/jobs/view/4461694701): Unknown posting age (rejected by default)
+[2026-09-23 12:17:56] [INFO] [agent.brain] [ACT] Freshness filter rejected 'Senior Python Backend Engineer' (https://linkedin.com/jobs/view/4467231762): Unknown posting age (rejected by default)
+[2026-09-23 12:17:57] [INFO] [pipeline.filters] Hard filter rejected job 'Python Backend Engineer at Snayu AI — India' (https://linkedin.com/jobs/view/4467855637): Job availability is 'UNKNOWN', required 'ACTIVE'
+[2026-09-23 12:17:57] [INFO] [pipeline.filters] Hard filter rejected job 'Senior Full stack Python/Go + React' (https://linkedin.com/jobs/view/4466965797): Job availability is 'UNKNOWN', required 'ACTIVE'
+[2026-09-23 12:17:57] [INFO] [pipeline.filters] Hard filter rejected job 'AI Engineer: Python / FastAPI / RAG' (https://linkedin.com/jobs/view/4461874875): Job availability is 'UNKNOWN', required 'ACTIVE'
+[2026-09-23 12:17:57] [INFO] [pipeline.filters] Hard filter rejected job 'Python Backend Engineer at Technorover' (https://linkedin.com/jobs/view/4469144889): Job availability is 'UNKNOWN', required 'ACTIVE'
+[2026-09-23 12:17:57] [INFO] [pipeline.filters] Hard filters: 0 jobs passed, 4 rejected.
+[2026-09-23 12:17:57] [INFO] [agent.tools.memory] [TOOL:memory] Saved agent memory state to sandbox.
+[2026-09-23 12:17:57] [INFO] [agent.brain] [REFLECT] Finished cycle 1. Cumulative accepted jobs: 0/5
+[2026-09-23 12:17:57] [INFO] [agent.brain] [OBSERVE] Iteration 1/1 | Accepted: 0/5 (0.0%) | Max Age: 7d
+[2026-09-23 12:17:57] [INFO] [agent.brain] [DIAGNOSE] Freshness/availability friction (12 rejected): Primary cause was 'Posting age (8d) exceeds maximum allowed (7d)'. Search engines returned outdated or closed postings. Adapting search strategy with fresh keywords or alternative role phrasing without relaxing the 7-day limit.
+[2026-09-23 12:17:57] [INFO] [agent.brain] === Stopping condition reached: Maximum allowed iterations (1) reached. ===
+[2026-09-23 12:17:57] [INFO] [agent.tools.results] [TOOL:results] Persisting 0 accepted jobs to output/jobs.json
+[2026-09-23 12:17:57] [INFO] [agent.tools.results] [TOOL:results] Successfully saved 0 sorted jobs to E:\vishal\job-hunter\sandbox\output\jobs.json
+[2026-09-23 12:17:57] [INFO] [agent.brain] === Autonomous Brain completed. Results stored at: E:\vishal\job-hunter\sandbox\output\jobs.json ===
+[2026-09-23 12:17:57] [INFO] [main] =================================================================
+[2026-09-23 12:17:57] [INFO] [main]              JOB SEARCH MISSION COMPLETED                        
+[2026-09-23 12:17:57] [INFO] [main] =================================================================
+[2026-09-23 12:17:57] [INFO] [main] Total Accepted Jobs: 0/5 (Sorted: Newest First)
+[2026-09-23 12:17:57] [INFO] [main] 
+Results saved to: sandbox/output/jobs.json
+[2026-09-23 12:17:57] [INFO] [main] Search memory saved to: sandbox/memory/agent_memory.json
+[2026-09-23 12:17:57] [INFO] [main] Execution log saved to: sandbox/logs/agent.log
