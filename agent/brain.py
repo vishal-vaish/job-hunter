@@ -5,13 +5,13 @@ This file is responsible for:
 - Implementing the central autonomous orchestrator for the job-hunting agent.
 - Executing the real cognitive feedback loop:
   OBSERVE -> DIAGNOSE -> DECIDE -> ACT -> REFLECT -> REPEAT or STOP.
-- Inspecting previous search outcomes (yield, duplicates, filter rejections, semantic scores,
-  freshness/availability friction).
-- Diagnosing issues (stale results, query saturation, experience mismatch, location mismatch, low yield).
-- Deciding on adapted search strategies without relaxing the user's max_posting_age_days hard constraint.
-- Executing actions through the full pipeline:
+- Managing run isolation using unique run_id.
+- Maintaining intra-run deduplication to allow lifecycle revalidation across runs.
+- Collecting deterministic execution statistics and granular rejection reasons.
+- Executing actions through the strict pipeline:
   Search -> Normalize -> Deduplicate -> Posting Age Filter -> Availability Verification -> Hard Filters -> LLM Evaluation.
 - Enforcing latest-first sorting (newest posting age first, secondary by score).
+- Persisting run-isolated historical outputs and updating latest output.
 - Halting strictly upon reaching target job count, maximum iterations, or exhausting viable strategies.
 """
 
@@ -32,7 +32,7 @@ from pipeline.availability import JobAvailabilityVerifier
 from pipeline.deduplicator import JobDeduplicator
 from pipeline.filters import HardFilterEngine
 from pipeline.normalizer import JobNormalizer
-from utils.logger import get_logger
+from utils.logger import get_logger, generate_run_id
 
 logger = get_logger("agent.brain")
 
@@ -65,10 +65,14 @@ class AutonomousBrain:
         results_tool: Optional[ResultsTool] = None,
         evaluator: Optional[JobEvaluator] = None,
         ollama_client: Optional[OllamaClient] = None,
-        availability_verifier: Optional[JobAvailabilityVerifier] = None
+        availability_verifier: Optional[JobAvailabilityVerifier] = None,
+        run_id: Optional[str] = None,
+        search_prompt: Optional[str] = None
     ) -> None:
         self.candidate = candidate
         self.mission = mission
+        self.run_id = run_id or generate_run_id()
+        self.search_prompt = search_prompt
 
         # Agent tools
         self.search_tool = search_tool or SearchJobsTool()
@@ -77,9 +81,9 @@ class AutonomousBrain:
         self.evaluator = evaluator or JobEvaluator(ollama_client)
         self.ollama = ollama_client or OllamaClient()
 
-        # Pipeline components
+        # Pipeline components: Intra-run deduplicator allows lifecycle revalidation across runs
         self.normalizer = JobNormalizer()
-        self.deduplicator = JobDeduplicator(self.memory_tool.get_seen_urls())
+        self.deduplicator = JobDeduplicator()
         self.filter_engine = HardFilterEngine()
         self.availability_verifier = availability_verifier or JobAvailabilityVerifier()
 
@@ -88,6 +92,27 @@ class AutonomousBrain:
         self.evaluations: Dict[str, JobEvaluation] = {}
         self.iteration: int = 0
         self.is_stopped: bool = False
+
+        # Deterministic per-run statistics tracking
+        self.run_statistics: Dict[str, int] = {
+            "discovered": 0,
+            "unique": 0,
+            "stale": 0,
+            "fresh": 0,
+            "availability_checked": 0,
+            "active": 0,
+            "closed": 0,
+            "expired": 0,
+            "removed": 0,
+            "unknown": 0,
+            "hard_filter_passed": 0,
+            "llm_evaluated": 0,
+            "accepted": 0,
+            "rejected": 0
+        }
+
+        # Granular rejection log
+        self.run_rejections: List[Dict[str, Any]] = []
 
         # State tracking between iterations
         self.last_observation: Dict[str, Any] = {
@@ -114,6 +139,7 @@ class AutonomousBrain:
         previously_searched = self.memory_tool.get_searched_queries()
 
         observation = {
+            "run_id": self.run_id,
             "current_iteration": self.iteration,
             "max_iterations": self.mission.max_iterations,
             "accepted_jobs_count": current_accepted,
@@ -354,6 +380,7 @@ class AutonomousBrain:
         """
         Executes search through the strict pipeline:
         Search -> Normalize -> Deduplicate -> Posting Age Filter -> Availability Verification -> Hard Filters -> LLM Evaluation.
+        Collects deterministic execution statistics and granular rejection reasons.
         """
         query = decision.query
         logger.info(f"[ACT] Executing search query: '{query}'")
@@ -367,6 +394,7 @@ class AutonomousBrain:
             allowed_providers=self.mission.allowed_providers
         )
         raw_count = len(raw_jobs)
+        self.run_statistics["discovered"] += raw_count
 
         if raw_count == 0:
             logger.warning(f"[ACT] Query '{query}' yielded zero results.")
@@ -383,11 +411,22 @@ class AutonomousBrain:
         # 3. Normalize (Cleans text, extracts posting age and date confidence)
         normalized_jobs = self.normalizer.normalize_batch(raw_jobs)
 
-        # 4. Deduplicate
-        unique_jobs, duplicate_count = self.deduplicator.deduplicate(
-            normalized_jobs,
-            self.memory_tool.get_seen_urls()
-        )
+        # 4. Deduplicate (Intra-run deduplication)
+        unique_jobs, duplicate_count = self.deduplicator.deduplicate(normalized_jobs)
+        self.run_statistics["unique"] += len(unique_jobs)
+
+        # Record intra-run duplicates in rejection log
+        seen_set = set(j.url for j in unique_jobs)
+        for job in normalized_jobs:
+            if job.url not in seen_set:
+                self.run_rejections.append({
+                    "job_url": job.url,
+                    "title": job.title,
+                    "company": job.company,
+                    "stage": "deduplication",
+                    "reason": "duplicate",
+                    "details": {}
+                })
 
         # 5. Posting Age Filter (Deterministic check before network verification)
         fresh_jobs: List[Job] = []
@@ -396,19 +435,67 @@ class AutonomousBrain:
             age_ok, age_reason = HardFilterEngine.matches_posting_age(job, self.mission.posting_age_days)
             if age_ok:
                 fresh_jobs.append(job)
+                self.run_statistics["fresh"] += 1
             else:
+                self.run_statistics["stale"] += 1
                 logger.info(f"[ACT] Freshness filter rejected '{job.title}' ({job.url}): {age_reason}")
                 age_rejected.append((job, age_reason or "Exceeded max posting age"))
                 self.memory_tool.memory.record_job_outcome(job.url, accepted=False, reason=age_reason)
+                self.run_rejections.append({
+                    "job_url": job.url,
+                    "title": job.title,
+                    "company": job.company,
+                    "stage": "freshness",
+                    "reason": "posting_age_exceeded" if job.posted_age_days is not None else "unknown_posting_age",
+                    "details": {
+                        "posted_age_days": job.posted_age_days,
+                        "max_allowed_days": self.mission.posting_age_days,
+                        "confidence": job.posting_date_confidence
+                    }
+                })
 
         # 6. Availability Verification (Probes remaining fresh jobs)
+        self.run_statistics["availability_checked"] += len(fresh_jobs)
         verified_jobs = self.availability_verifier.verify_batch(fresh_jobs)
+
+        # Track availability counts and rejections
+        for job in verified_jobs:
+            status_lower = job.availability_status.lower()
+            if status_lower in self.run_statistics:
+                self.run_statistics[status_lower] += 1
+
+            if job.availability_status != "ACTIVE":
+                self.run_rejections.append({
+                    "job_url": job.url,
+                    "title": job.title,
+                    "company": job.company,
+                    "stage": "availability",
+                    "reason": f"job_{status_lower}",
+                    "details": {
+                        "availability_status": job.availability_status,
+                        "checked_at": job.availability_checked_at
+                    }
+                })
 
         # 7. Apply Remaining Hard Filters (availability, excluded companies, locations, work modes)
         passed_jobs, filter_rejected = self.filter_engine.filter_batch(
             verified_jobs,
             self.mission
         )
+        self.run_statistics["hard_filter_passed"] += len(passed_jobs)
+
+        for r_job, r_reason in filter_rejected:
+            # Avoid duplicate rejection logging if already logged in availability
+            if "availability" not in r_reason.lower():
+                self.run_rejections.append({
+                    "job_url": r_job.url,
+                    "title": r_job.title,
+                    "company": r_job.company,
+                    "stage": "hard_filter",
+                    "reason": r_reason,
+                    "details": {}
+                })
+
         all_rejections = age_rejected + filter_rejected
         filter_rejected_count = len(all_rejections)
 
@@ -420,6 +507,7 @@ class AutonomousBrain:
         accepted_count = 0
         low_score_count = 0
         target = self.mission.minimum_target_jobs
+        self.run_statistics["llm_evaluated"] += len(passed_jobs)
 
         for job in passed_jobs:
             # Check if we reached target mid-batch
@@ -438,6 +526,7 @@ class AutonomousBrain:
                 self.evaluations[job.url] = evaluation
                 self.memory_tool.memory.record_job_outcome(job.url, accepted=True)
                 accepted_count += 1
+                self.run_statistics["accepted"] += 1
                 logger.info(
                     f"[ACT] Job ACCEPTED: '{job.title}' at '{job.company}' "
                     f"(Score: {evaluation.score}, Age: {job.posted_age_days}d)"
@@ -449,7 +538,21 @@ class AutonomousBrain:
                     reason=f"Low score ({evaluation.score})"
                 )
                 low_score_count += 1
+                self.run_statistics["rejected"] += 1
                 logger.info(f"[ACT] Job REJECTED: '{job.title}' at '{job.company}' (Score: {evaluation.score})")
+                self.run_rejections.append({
+                    "job_url": job.url,
+                    "title": job.title,
+                    "company": job.company,
+                    "stage": "evaluation",
+                    "reason": "llm_not_suitable",
+                    "details": {
+                        "score": evaluation.score,
+                        "threshold": self.mission.evaluation_threshold,
+                        "reasons": evaluation.reasons,
+                        "missing_skills": evaluation.missing_skills
+                    }
+                })
 
         iteration_metrics = {
             "query": query,
@@ -495,11 +598,11 @@ class AutonomousBrain:
     def run(self) -> List[Job]:
         """
         Executes the Autonomous Brain control loop until a stopping condition is met.
-        Enforces latest-first sorting before persisting results.
+        Enforces latest-first sorting and run-isolated persistence.
         Returns the list of accepted jobs.
         """
         logger.info(
-            f"=== Starting Autonomous Brain Loop | Objective: '{self.mission.objective}' "
+            f"=== Starting Autonomous Brain Loop [{self.run_id}] | Objective: '{self.mission.objective}' "
             f"| Max Age: {self.mission.posting_age_days}d ==="
         )
 
@@ -538,11 +641,27 @@ class AutonomousBrain:
             )
         )
 
-        # Persist final accepted jobs to sandbox/output/jobs.json
-        saved_file = self.results_tool.save_results(
+        # Persist run results: writes sandbox/output/runs/<run_id>/jobs.json AND sandbox/output/jobs.json
+        self.results_tool.save_run_results(
+            run_id=self.run_id,
             mission=self.mission,
             accepted_jobs=self.accepted_jobs,
-            evaluations=self.evaluations
+            evaluations=self.evaluations,
+            customer_id=self.candidate.customer_id,
+            search_prompt=self.search_prompt
         )
-        logger.info(f"=== Autonomous Brain completed. Results stored at: {saved_file} ===")
+
+        # Persist deterministic run summary: sandbox/output/runs/<run_id>/summary.json
+        self.results_tool.save_run_summary(
+            run_id=self.run_id,
+            statistics=self.run_statistics,
+            rejections=self.run_rejections,
+            customer_id=self.candidate.customer_id,
+            search_prompt=self.search_prompt
+        )
+
+        logger.info(
+            f"=== Autonomous Brain completed [{self.run_id}]. "
+            f"Accepted: {len(self.accepted_jobs)} jobs | Total discovered: {self.run_statistics['discovered']} ==="
+        )
         return self.accepted_jobs

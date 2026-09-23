@@ -3,8 +3,7 @@ Sandbox Security Module.
 
 This file is responsible for:
 - Enforcing application-level filesystem isolation for the autonomous agent.
-- Restricting file access strictly to subdirectories under sandbox/:
-    * input/     (read-only)
+- Restricting file access strictly to execution subdirectories under sandbox/:
     * output/    (read/write)
     * memory/    (read/write)
     * logs/      (append/write)
@@ -31,7 +30,6 @@ class Sandbox:
     """
 
     ALLOWED_CATEGORIES: Dict[str, Set[str]] = {
-        "input": {"read"},
         "output": {"read", "write"},
         "memory": {"read", "write"},
         "logs": {"read", "write", "append"},
@@ -46,7 +44,6 @@ class Sandbox:
 
         # Define internal category root directories
         self.categories: Dict[str, Path] = {
-            "input": (self.root_dir / "input").resolve(),
             "output": (self.root_dir / "output").resolve(),
             "memory": (self.root_dir / "memory").resolve(),
             "logs": (self.root_dir / "logs").resolve(),

@@ -75,9 +75,12 @@ job-hunter/
 ├── search/
 │   ├── __init__.py
 │   └── global_search.py     # Provider router and discovery coordinator
+├── data/
+│   └── candidates/          # Source of truth candidate profiles (<customer_id>.json)
 ├── storage/
 │   ├── __init__.py
-│   └── memory.py            # Persistent agent memory state
+│   ├── memory.py            # Persistent agent memory state
+│   └── candidate_repository.py # CandidateRepository abstraction & local repository
 ├── agent/
 │   ├── __init__.py
 │   ├── profile_validator.py # Candidate profile validator
@@ -90,7 +93,6 @@ job-hunter/
 │       ├── memory.py        # Narrow tool for sandbox/memory/ access
 │       └── results.py       # Narrow tool for saving jobs to sandbox/output/
 ├── sandbox/
-│   ├── input/               # Candidate input profiles (Read-only)
 │   ├── output/              # Accepted jobs output (Read/Write)
 │   ├── memory/              # Agent persistent memory (Read/Write)
 │   ├── logs/                # System log files (Append/Write)
@@ -104,17 +106,16 @@ job-hunter/
 
 ## 4. Sandbox Security Model
 
-The agent operates strictly within an application-level sandbox:
+The agent operates strictly within an execution-focused sandbox:
 
 | Directory | Permission | Purpose |
 |---|---|---|
-| `sandbox/input/` | Read | Candidate profiles |
-| `sandbox/output/` | Read / Write | Accepted jobs output (`jobs.json`) |
-| `sandbox/memory/` | Read / Write | Search history & stats (`agent_memory.json`) |
-| `sandbox/logs/` | Append / Write | Execution log (`agent.log`) |
+| `sandbox/output/` | Read / Write | Latest results (`jobs.json`) and run history (`runs/<run_id>/`) |
+| `sandbox/memory/` | Read / Write | Persistent cross-run memory (`agent_memory.json`) |
+| `sandbox/logs/` | Append / Write | Per-run log files (`<run_id>.log`) and aggregate `agent.log` |
 | `sandbox/workspace/` | Read / Write | Temporary processing |
 
-Attempts to access project code, `.env`, `.git`, or the parent filesystem via `../` traversal or absolute paths are strictly blocked by `SandboxSecurityError`.
+Attempts to access project code, `.env`, `.git`, or the parent filesystem via `../` traversal or absolute paths are strictly blocked by `SandboxSecurityError`. Candidate source data lives outside `sandbox/` in `data/candidates/`.
 
 ---
 
@@ -130,7 +131,7 @@ Ensure local services are running on your machine:
 
 ---
 
-## 6. Quick Start
+## 6. Quick Start & CLI Execution Modes
 
 ### 1. Install Dependencies
 ```bash
@@ -145,25 +146,55 @@ OLLAMA_MODEL=llama3.1:8b
 SEARXNG_BASE_URL=http://localhost:8081
 ```
 
-### 3. Add Candidate Profile
-Place your candidate profile in `sandbox/input/candidate.json`:
+### 3. Candidate Profiles (data/candidates/<customer_id>.json)
+Candidate source data is keyed by `customer_id`. Example `data/candidates/12345.json`:
 ```json
 {
+  "customer_id": "12345",
   "target_roles": ["Python Developer", "Backend Engineer"],
   "skills": ["Python", "FastAPI", "Django", "PostgreSQL"],
   "experience_years": 3,
   "locations": ["Delhi", "Noida", "Gurgaon"],
   "work_modes": ["remote", "hybrid"],
+  "max_posting_age_days": 7,
   "target_job_count": 5
 }
 ```
 
-### 4. Run the Autonomous Brain
+### 4. Running the Job Hunter
+
+#### Mode 1: Interactive Prompt Mode (Customer-Independent)
 ```bash
 python main.py
 ```
+Prompts directly for the search request (e.g. `What kind of jobs are you looking for?`). If any key detail is missing (such as location or role), it asks follow-up clarifying questions (e.g. `Location not specified. Enter target location (or press Enter for 'Remote'):`), then executes the search and exits cleanly.
 
-### 5. Inspect Results
-- Accepted jobs: `sandbox/output/jobs.json`
-- Agent memory & history: `sandbox/memory/agent_memory.json`
-- Logs: `sandbox/logs/agent.log`
+#### Mode 2: Registered Customer ID Mode (Direct / Headless)
+```bash
+python main.py --customer-id=12345
+```
+Directly loads candidate `12345` via `CandidateRepository` and executes immediately with **zero terminal prompts**.
+
+#### Mode 3: Direct Search Prompt Mode (Non-interactive)
+```bash
+python main.py --prompt="Find React developer jobs in Bangalore posted in the last 7 days"
+```
+Synthesizes a candidate profile directly from the search prompt and executes the search.
+
+
+*(Note: `--customer-id` and `--prompt` are mutually exclusive on the command line).*
+
+### 5. Inspect Results & Execution History
+Each execution generates a unique `run_id` (e.g. `run_YYYYMMDD_HHMMSS_<hex>`):
+- **Current Output**:
+  - `sandbox/output/jobs.json`: Discovered & accepted jobs from the latest completed run (sorted newest-first).
+- **Historical Output**:
+  - `sandbox/output/runs/<run_id>/jobs.json`: Snapshot of accepted jobs for that specific run.
+  - `sandbox/output/runs/<run_id>/summary.json`: Deterministic execution counters and rejection reasons with associated `customer_id` and `search_prompt`.
+  - `sandbox/output/runs/<run_id>/run.json`: Run lifecycle metadata, `customer_id`, `search_prompt`, and status (`completed` or `failed`).
+- **Logs**:
+  - `sandbox/logs/<run_id>.log`: Isolated, detailed execution trace for each specific run.
+- **Cross-Run Persistent Memory**:
+  - `sandbox/memory/agent_memory.json`: Cumulative searched queries and lifetime search statistics.
+
+

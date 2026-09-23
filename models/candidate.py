@@ -16,6 +16,10 @@ class CandidateProfile(BaseModel):
     """
     Internal structured candidate profile holding career goals and preferences.
     """
+    customer_id: Optional[str] = Field(
+        default=None,
+        description="External unique customer identifier, e.g. '12345'"
+    )
     target_roles: List[str] = Field(
         ...,
         description="Target job titles or role keywords, e.g. ['Java Developer', 'Backend Engineer']",

@@ -1,4 +1,5 @@
 {
+  "customer_id": "default",
   "target_roles": [
     "Python Developer",
     "Backend Engineer"
@@ -7,8 +8,7 @@
     "Python",
     "FastAPI",
     "Django",
-    "PostgreSQL",
-    "Docker"
+    "PostgreSQL"
   ],
   "experience_years": 3,
   "locations": [
@@ -24,8 +24,6 @@
     "linkedin"
   ],
   "max_posting_age_days": 7,
-  "excluded_companies": [
-    "Revature"
-  ],
+  "excluded_companies": [],
   "target_job_count": 5
 }

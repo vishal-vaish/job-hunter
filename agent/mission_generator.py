@@ -28,11 +28,17 @@ class MissionGenerator:
     def __init__(self, ollama_client: Optional[OllamaClient] = None) -> None:
         self.ollama = ollama_client or OllamaClient()
 
-    def generate_mission(self, candidate: CandidateProfile) -> SearchMission:
+    def generate_mission(
+        self,
+        candidate: CandidateProfile,
+        search_prompt: Optional[str] = None
+    ) -> SearchMission:
         """
-        Synthesizes a structured SearchMission from the candidate profile.
+        Synthesizes a structured SearchMission from the candidate profile and optional run-specific search prompt.
         """
         logger.info(f"Generating search mission for roles: {candidate.target_roles}")
+        if search_prompt:
+            logger.info(f"Incorporating run search prompt: '{search_prompt}'")
 
         system_prompt = (
             "You are an expert technical recruiter and autonomous job search planner. "
@@ -50,9 +56,17 @@ class MissionGenerator:
             f"- Work Modes: {candidate.work_modes}\n"
             f"- Excluded Companies: {candidate.excluded_companies}\n"
             f"- Desired Job Count: {candidate.target_job_count}\n"
-            f"- Max Posting Age Days: {candidate.max_posting_age_days}\n\n"
-            "Generate a SearchMission JSON object that adheres strictly to the schema."
+            f"- Max Posting Age Days: {candidate.max_posting_age_days}\n"
         )
+
+        if search_prompt:
+            user_prompt += (
+                f"\nSpecific Search Request for this Run:\n"
+                f"\"{search_prompt}\"\n"
+                f"Prioritize this search request in the objective, roles, and keywords while respecting the candidate profile.\n"
+            )
+
+        user_prompt += "\nGenerate a SearchMission JSON object that adheres strictly to the schema."
 
         try:
             mission = self.ollama.generate_structured(
@@ -73,15 +87,23 @@ class MissionGenerator:
 
         except Exception as e:
             logger.warning(f"LLM mission generation failed ({e}). Falling back to deterministic plan.")
-            return self._generate_fallback_mission(candidate)
+            return self._generate_fallback_mission(candidate, search_prompt=search_prompt)
 
-    def _generate_fallback_mission(self, candidate: CandidateProfile) -> SearchMission:
+    def _generate_fallback_mission(
+        self,
+        candidate: CandidateProfile,
+        search_prompt: Optional[str] = None
+    ) -> SearchMission:
         """
         Creates a deterministic SearchMission directly from candidate attributes
         without invoking the LLM.
         """
         primary_role = candidate.target_roles[0]
-        objective = f"Find {candidate.target_job_count} matching positions for {primary_role}"
+        if search_prompt:
+            objective = f"{search_prompt} (Target: {primary_role})"
+        else:
+            objective = f"Find {candidate.target_job_count} matching positions for {primary_role}"
+
 
         return SearchMission(
             objective=objective,

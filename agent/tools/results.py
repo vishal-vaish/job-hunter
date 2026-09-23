@@ -3,11 +3,13 @@ Results Persistence Tool Module.
 
 This file is responsible for:
 - Saving finalized, accepted job listings and their semantic evaluations.
-- Writing output strictly to sandbox/output/jobs.json via the Sandbox abstraction.
-- Generating a rich, well-structured output document containing metadata, fit scores,
-  matched skills, freshness metrics (posted_at, posted_age_days), availability status,
-  and direct URLs for the candidate.
+- Supporting the run-isolated output architecture:
+  * Current output: sandbox/output/jobs.json (latest completed execution).
+  * Historical output: sandbox/output/runs/<run_id>/jobs.json.
+  * Run summary: sandbox/output/runs/<run_id>/summary.json.
+  * Run metadata: sandbox/output/runs/<run_id>/run.json.
 - Enforcing latest-first sorting (newest posting age first, secondary by evaluation score).
+- Recording deterministic execution statistics and granular rejection reasons.
 """
 
 from datetime import datetime, timezone
@@ -24,25 +26,20 @@ logger = get_logger("agent.tools.results")
 
 class ResultsTool:
     """
-    Narrow tool allowing the Brain to persist final accepted jobs to sandbox/output/.
+    Narrow tool allowing the Brain to persist run-isolated results to sandbox/output/.
     """
 
     def __init__(self, sandbox: Optional[Sandbox] = None) -> None:
         self.sandbox = sandbox or default_sandbox
 
-    def save_results(
+    def format_accepted_jobs(
         self,
-        mission: SearchMission,
         accepted_jobs: List[Job],
-        evaluations: Dict[str, JobEvaluation],
-        filename: str = "jobs.json"
-    ) -> Path:
+        evaluations: Dict[str, JobEvaluation]
+    ) -> List[Dict[str, Any]]:
         """
-        Saves accepted jobs along with evaluation details to sandbox/output/jobs.json.
-        Enforces latest-first sorting (posted_age_days ASC, secondary evaluation.score DESC).
+        Sorts jobs newest-first and serializes each job into a comprehensive dictionary.
         """
-        logger.info(f"[TOOL:results] Persisting {len(accepted_jobs)} accepted jobs to output/{filename}")
-
         # Deterministic sorting: Newest first (lowest posted_age_days), secondary highest score
         sorted_jobs = sorted(
             accepted_jobs,
@@ -80,6 +77,112 @@ class ResultsTool:
             }
             formatted_jobs.append(item)
 
+        return formatted_jobs
+
+    def save_run_results(
+        self,
+        run_id: str,
+        mission: SearchMission,
+        accepted_jobs: List[Job],
+        evaluations: Dict[str, JobEvaluation],
+        customer_id: Optional[str] = None,
+        search_prompt: Optional[str] = None
+    ) -> Dict[str, Path]:
+        """
+        Persists accepted jobs to both the historical run directory:
+          sandbox/output/runs/<run_id>/jobs.json
+        and the latest current output:
+          sandbox/output/jobs.json
+        """
+        formatted_jobs = self.format_accepted_jobs(accepted_jobs, evaluations)
+
+        metadata: Dict[str, Any] = {
+            "run_id": run_id,
+            "customer_id": customer_id,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "objective": mission.objective,
+            "target_roles": mission.search_roles,
+            "threshold": mission.evaluation_threshold,
+            "max_posting_age_days": mission.posting_age_days,
+            "sorting": "newest_first (posted_age_days ASC, score DESC)",
+            "total_accepted_jobs": len(formatted_jobs)
+        }
+        if search_prompt:
+            metadata["search_prompt"] = search_prompt
+
+        output_payload: Dict[str, Any] = {
+            "metadata": metadata,
+            "jobs": formatted_jobs
+        }
+
+        # 1. Historical run output: sandbox/output/runs/<run_id>/jobs.json
+        historical_rel = f"runs/{run_id}/jobs.json"
+        historical_path = self.sandbox.write_json("output", historical_rel, output_payload, indent=2)
+
+        # 2. Latest current output: sandbox/output/jobs.json
+        current_path = self.sandbox.write_json("output", "jobs.json", output_payload, indent=2)
+
+        logger.info(f"[TOOL:results] Saved historical jobs to {historical_path} and current jobs to {current_path}")
+        return {"historical": historical_path, "current": current_path}
+
+    def save_run_summary(
+        self,
+        run_id: str,
+        statistics: Dict[str, Any],
+        rejections: List[Dict[str, Any]],
+        customer_id: Optional[str] = None,
+        search_prompt: Optional[str] = None
+    ) -> Path:
+        """
+        Persists deterministic execution statistics and granular rejection reasons to:
+          sandbox/output/runs/<run_id>/summary.json
+        """
+        summary_payload: Dict[str, Any] = {
+            "run_id": run_id,
+            "customer_id": customer_id,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "statistics": statistics,
+            "rejections": rejections
+        }
+        if search_prompt:
+            summary_payload["search_prompt"] = search_prompt
+
+        rel_path = f"runs/{run_id}/summary.json"
+        saved_path = self.sandbox.write_json("output", rel_path, summary_payload, indent=2)
+        logger.info(f"[TOOL:results] Saved run summary to {saved_path}")
+        return saved_path
+
+
+    def save_run_record(
+        self,
+        run_id: str,
+        run_record: Dict[str, Any]
+    ) -> Path:
+        """
+        Persists structured run metadata (status, timestamps, candidate parameters) to:
+          sandbox/output/runs/<run_id>/run.json
+        """
+        rel_path = f"runs/{run_id}/run.json"
+        saved_path = self.sandbox.write_json("output", rel_path, run_record, indent=2)
+        logger.info(f"[TOOL:results] Saved run metadata to {saved_path}")
+        return saved_path
+
+    def save_results(
+        self,
+        mission: SearchMission,
+        accepted_jobs: List[Job],
+        evaluations: Dict[str, JobEvaluation],
+        filename: str = "jobs.json",
+        run_id: Optional[str] = None
+    ) -> Path:
+        """
+        Backwards-compatible convenience method.
+        """
+        if run_id:
+            res = self.save_run_results(run_id, mission, accepted_jobs, evaluations)
+            return res["current"]
+
+        formatted_jobs = self.format_accepted_jobs(accepted_jobs, evaluations)
         output_payload: Dict[str, Any] = {
             "metadata": {
                 "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -92,7 +195,4 @@ class ResultsTool:
             },
             "jobs": formatted_jobs
         }
-
-        saved_path = self.sandbox.write_json("output", filename, output_payload, indent=2)
-        logger.info(f"[TOOL:results] Successfully saved {len(formatted_jobs)} sorted jobs to {saved_path}")
-        return saved_path
+        return self.sandbox.write_json("output", filename, output_payload, indent=2)

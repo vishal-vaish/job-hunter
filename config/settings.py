@@ -53,7 +53,7 @@ class Settings:
         # ---------------------------------------------------------
         self.base_dir: Path = BASE_DIR
         self.sandbox_dir: Path = SANDBOX_DIR
-        self.input_dir: Path = SANDBOX_DIR / "input"
+        self.candidates_dir: Path = BASE_DIR / "data" / "candidates"
         self.output_dir: Path = SANDBOX_DIR / "output"
         self.memory_dir: Path = SANDBOX_DIR / "memory"
         self.logs_dir: Path = SANDBOX_DIR / "logs"

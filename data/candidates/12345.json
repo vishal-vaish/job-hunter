@@ -1,0 +1,32 @@
+{
+  "customer_id": "12345",
+  "target_roles": [
+    "Python Developer",
+    "Backend Engineer"
+  ],
+  "skills": [
+    "Python",
+    "FastAPI",
+    "Django",
+    "PostgreSQL",
+    "Docker"
+  ],
+  "experience_years": 3,
+  "locations": [
+    "Delhi",
+    "Noida",
+    "Gurgaon"
+  ],
+  "work_modes": [
+    "remote",
+    "hybrid"
+  ],
+  "job_providers": [
+    "linkedin"
+  ],
+  "max_posting_age_days": 7,
+  "excluded_companies": [
+    "Revature"
+  ],
+  "target_job_count": 5
+}
