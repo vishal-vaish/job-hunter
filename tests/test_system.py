@@ -283,7 +283,7 @@ class TestFreshnessAndAvailability(unittest.TestCase):
 
 
 class TestProviders(unittest.TestCase):
-    """Verifies LinkedIn provider query building and URL parsing."""
+    """Verifies LinkedIn provider query building, URL matching, defensive parsing, and GlobalSearch telemetry."""
 
     def test_linkedin_query_builder(self):
         provider = LinkedInProvider()
@@ -297,10 +297,383 @@ class TestProviders(unittest.TestCase):
         self.assertIn('"Delhi"', query)
         self.assertIn("Django", query)
 
-    def test_linkedin_url_check(self):
+    def test_linkedin_url_matching_comprehensive(self):
         provider = LinkedInProvider()
-        self.assertTrue(provider.is_provider_url("https://www.linkedin.com/jobs/view/12345"))
-        self.assertFalse(provider.is_provider_url("https://github.com/torvalds/linux"))
+        valid_urls = [
+            "https://www.linkedin.com/jobs/view/12345",
+            "https://in.linkedin.com/jobs/view/45678",
+            "https://uk.linkedin.com/jobs/view/software-engineer-7890",
+            "https://in.linkedin.com/jobs/python-developer-jobs-kolkata",
+            "https://www.linkedin.com/jobs/search?keywords=Python",
+            "https://www.linkedin.com/jobs/collections/recommended",
+            "https://www.linkedin.com/jobs/",
+            "https://www.linkedin.com/jobs/view/senior-python-dev-at-tech-998877?position=1&trk=public_jobs"
+        ]
+        for url in valid_urls:
+            self.assertTrue(provider.is_provider_url(url), f"Should match valid LinkedIn job URL: {url}")
+
+        invalid_urls = [
+            "https://www.linkedin.com/feed/",
+            "https://www.linkedin.com/in/john-doe",
+            "https://www.linkedin.com/company/google",
+            "https://www.linkedin.com/school/stanford-university/",
+            "https://www.linkedin.com/pulse/some-article",
+            "https://www.python.org/",
+            "https://www.w3schools.com/python/",
+            "https://github.com/torvalds/linux",
+            "",
+            None
+        ]
+        for url in invalid_urls:
+            self.assertFalse(provider.is_provider_url(url), f"Should reject non-job URL: {url}")
+
+    def test_linkedin_clean_url(self):
+        provider = LinkedInProvider()
+        # View URL with slug and query params
+        url1 = "https://in.linkedin.com/jobs/view/python-developer-at-acme-123456?trk=public_jobs&trackingId=abc"
+        self.assertEqual(provider.clean_url(url1), "https://www.linkedin.com/jobs/view/123456")
+
+        # View URL with just id
+        url2 = "https://www.linkedin.com/jobs/view/998877?refId=xyz"
+        self.assertEqual(provider.clean_url(url2), "https://www.linkedin.com/jobs/view/998877")
+
+        # General jobs directory URL stripping tracking
+        url3 = "https://in.linkedin.com/jobs/python-jobs?position=1&pageNum=0&trk=public_jobs"
+        self.assertEqual(provider.clean_url(url3), "https://in.linkedin.com/jobs/python-jobs")
+
+    def test_linkedin_parse_realistic_searxng_result(self):
+        provider = LinkedInProvider()
+        raw_result = {
+            "url": "https://in.linkedin.com/jobs/view/python-developer-at-acme-corp-4467855637?trk=public_jobs",
+            "title": "Python Developer - Acme Corp - Delhi, India | LinkedIn",
+            "content": "Acme Corp is hiring a Python Developer in Delhi. 3 days ago. Experience with FastAPI and PostgreSQL required.",
+            "publishedDate": "3 days ago",
+            "engines": ["bing"],
+            "score": 1.0
+        }
+        job, fail_reason = provider.parse_result_detailed(raw_result, search_query="test query")
+        self.assertIsNotNone(job)
+        self.assertIsNone(fail_reason)
+        self.assertEqual(job.title, "Python Developer")
+        self.assertEqual(job.company, "Acme Corp")
+        self.assertEqual(job.location, "Delhi, India")
+        self.assertEqual(job.url, "https://www.linkedin.com/jobs/view/4467855637")
+        self.assertEqual(job.posted_text, "3 days ago")
+        self.assertEqual(job.provider, "linkedin")
+
+    def test_linkedin_parse_fallback_unknown_company_location(self):
+        provider = LinkedInProvider()
+        raw_result = {
+            "url": "https://www.linkedin.com/jobs/view/555123",
+            "title": "Senior Backend Engineer | LinkedIn",
+            "content": "Looking for senior backend developers to join our team.",
+            "engines": ["bing"],
+            "score": 0.8
+        }
+        job, fail_reason = provider.parse_result_detailed(raw_result, search_query="test query")
+        self.assertIsNotNone(job)
+        self.assertEqual(job.title, "Senior Backend Engineer")
+        self.assertEqual(job.company, "Unknown")
+        self.assertEqual(job.location, "Unknown")
+        self.assertEqual(job.url, "https://www.linkedin.com/jobs/view/555123")
+
+    def test_linkedin_parse_failure_on_non_provider_url(self):
+        provider = LinkedInProvider()
+        raw_result = {
+            "url": "https://www.python.org/downloads/",
+            "title": "Download Python | Python.org",
+            "content": "The official home of the Python Programming Language"
+        }
+        job, fail_reason = provider.parse_result_detailed(raw_result, search_query="test query")
+        self.assertIsNone(job)
+        self.assertIn("not a recognized LinkedIn job URL", fail_reason)
+
+    def test_global_search_telemetry_all_matched(self):
+        class MockSearXNGClient:
+            def search(self, query: str, pageno: int = 1):
+                return [
+                    {
+                        "url": f"https://www.linkedin.com/jobs/view/{i}",
+                        "title": f"Python Developer - Company {i} - Delhi | LinkedIn",
+                        "content": f"Description for job {i}",
+                        "publishedDate": "1 day ago"
+                    }
+                    for i in range(10)
+                ]
+
+        gs = GlobalSearch(searxng_client=MockSearXNGClient())
+        jobs = gs.search(query="site:linkedin.com/jobs/view Python", allowed_providers=["linkedin"])
+        self.assertEqual(len(jobs), 10)
+        telemetry = gs.last_telemetry
+        self.assertEqual(telemetry.raw_results, 10)
+        self.assertEqual(telemetry.provider_matches, 10)
+        self.assertEqual(telemetry.parse_successes, 10)
+        self.assertEqual(telemetry.parse_failures, 0)
+        self.assertEqual(telemetry.unmatched_urls, 0)
+
+    def test_global_search_telemetry_domain_mismatch(self):
+        class MockSearXNGClient:
+            def search(self, query: str, pageno: int = 1):
+                # Search engine returned general web results instead of LinkedIn
+                return [
+                    {"url": "https://www.python.org/", "title": "Welcome to Python.org", "content": "Official site"},
+                    {"url": "https://www.w3schools.com/python/", "title": "Python Tutorial", "content": "Tutorials"},
+                    {"url": "https://en.wikipedia.org/wiki/Python", "title": "Python Wikipedia", "content": "Wiki"}
+                ]
+
+        gs = GlobalSearch(searxng_client=MockSearXNGClient())
+        jobs = gs.search(query="Python jobs", allowed_providers=["linkedin"])
+        self.assertEqual(len(jobs), 0)
+        telemetry = gs.last_telemetry
+        self.assertEqual(telemetry.raw_results, 3)
+        self.assertEqual(telemetry.provider_matches, 0)
+        self.assertEqual(telemetry.unmatched_urls, 3)
+        self.assertEqual(telemetry.parse_successes, 0)
+        self.assertEqual(len(telemetry.rejections), 3)
+
+    def test_brain_diagnose_case_distinction(self):
+        from agent.brain import AutonomousBrain
+        from models.candidate import CandidateProfile
+        from models.mission import SearchMission
+
+        candidate = CandidateProfile(
+            customer_id="test_user",
+            target_roles=["Python Developer", "Backend Engineer"],
+            skills=["Python", "FastAPI"],
+            locations=["Delhi"],
+            max_posting_age_days=7
+        )
+        mission = SearchMission(
+            objective="Test mission",
+            search_roles=["Python Developer"],
+            locations=["Delhi"],
+            posting_age_days=7,
+            max_iterations=5
+        )
+        brain = AutonomousBrain(candidate=candidate, mission=mission)
+
+        # Case A: Search engine returned 0 results
+        obs_a = {
+            "accepted_jobs_count": 0,
+            "target_job_count": 10,
+            "last_iteration_stats": {
+                "raw_count": 0,
+                "search_raw_results": 0,
+                "search_provider_matches": 0,
+                "search_parse_failures": 0
+            }
+        }
+        brain.iteration = 1
+        diag_a = brain.diagnose(obs_a)
+        self.assertIn("Zero search results returned by search engine", diag_a)
+
+        # Case B1: Search engine returned results, but none matched provider (domain mismatch)
+        obs_b1 = {
+            "accepted_jobs_count": 0,
+            "target_job_count": 10,
+            "last_iteration_stats": {
+                "raw_count": 0,
+                "search_raw_results": 10,
+                "search_provider_matches": 0,
+                "search_unmatched_urls": 10
+            }
+        }
+        diag_b1 = brain.diagnose(obs_b1)
+        self.assertIn("Provider domain mismatch", diag_b1)
+        self.assertIn("without mutating candidate target roles", diag_b1)
+
+        # Case B2: Provider URLs found, but parsing failed
+        obs_b2 = {
+            "accepted_jobs_count": 0,
+            "target_job_count": 10,
+            "last_iteration_stats": {
+                "raw_count": 0,
+                "search_raw_results": 10,
+                "search_provider_matches": 10,
+                "search_parse_failures": 10
+            }
+        }
+        diag_b2 = brain.diagnose(obs_b2)
+        self.assertIn("Provider parsing failure", diag_b2)
+        self.assertIn("without mutating candidate target roles", diag_b2)
+
+    def test_full_brain_search_pipeline_flow_with_mocked_data(self):
+        """
+        Verifies the full end-to-end code flow with realistic mocked SearXNG data:
+        SearXNG raw results (mixed LinkedIn + non-provider) -> GlobalSearch routing & telemetry
+        -> LinkedIn parsing & normalization -> Deduplication -> Freshness & Hard filters
+        -> Semantic evaluation -> Brain state reflection -> Final results saving.
+        Ensures zero realtime network calls, zero sandbox pollution, and no role mutation.
+        """
+        from agent.brain import AutonomousBrain
+        from agent.tools.search_jobs import SearchJobsTool
+        from agent.tools.memory import MemoryTool
+        from agent.tools.results import ResultsTool
+        from agent.evaluator import JobEvaluator
+
+        # 1. Realistic mocked SearXNG search engine output (Bing style with mixed results)
+        mock_raw_searxng_results = [
+            # 3 Non-provider URLs injected by search engine
+            {"url": "https://www.python.org/", "title": "Welcome to Python.org", "content": "Official Python website."},
+            {"url": "https://www.w3schools.com/python/", "title": "Python Tutorial - W3Schools", "content": "Learn Python."},
+            {"url": "https://en.wikipedia.org/wiki/Python", "title": "Python (programming language) - Wikipedia", "content": "Wiki."},
+            # 7 LinkedIn results with varying freshness and locations
+            {
+                "url": "https://in.linkedin.com/jobs/view/python-developer-at-techcorp-4467855631?trk=public_jobs",
+                "title": "Python Developer - TechCorp - Delhi, India | LinkedIn",
+                "content": "TechCorp is hiring a Python Developer in Delhi. 2 days ago. Experience with FastAPI and Django.",
+                "publishedDate": "2 days ago"
+            },
+            {
+                "url": "https://in.linkedin.com/jobs/view/backend-engineer-at-startupx-4467855632",
+                "title": "Backend Engineer - StartupX - Delhi, India | LinkedIn",
+                "content": "StartupX is seeking a Backend Engineer in Delhi. 3 days ago. Python, REST, PostgreSQL.",
+                "publishedDate": "3 days ago"
+            },
+            {
+                "url": "https://in.linkedin.com/jobs/view/senior-python-dev-at-innovate-4467855633",
+                "title": "Senior Python Developer - Innovate - Delhi, India | LinkedIn",
+                "content": "Innovate is hiring in Delhi. 1 day ago. Python, Microservices.",
+                "publishedDate": "1 day ago"
+            },
+            {
+                "url": "https://in.linkedin.com/jobs/view/stale-python-dev-at-oldco-4467855634",
+                "title": "Python Developer - OldCo - Delhi, India | LinkedIn",
+                "content": "OldCo hiring Python developer in Delhi. 45 days ago.",
+                "publishedDate": "45 days ago"  # Stale: > 7 days constraint!
+            },
+            {
+                "url": "https://uk.linkedin.com/jobs/view/python-engineer-at-londonltd-4467855635",
+                "title": "Python Developer - LondonLtd - London, UK | LinkedIn",
+                "content": "LondonLtd hiring Python developer in London, UK. 2 days ago.",
+                "publishedDate": "2 days ago"  # Location mismatch: London != Delhi
+            },
+            {
+                "url": "https://in.linkedin.com/jobs/view/closed-python-job-4467855636",
+                "title": "Python Developer (No longer accepting applications) - InActiveCo - Delhi | LinkedIn",
+                "content": "Position has been filled. Delhi, India. 2 days ago.",
+                "publishedDate": "2 days ago"  # Closed status
+            },
+            {
+                "url": "https://in.linkedin.com/jobs/view/python-backend-at-cloudco-4467855637",
+                "title": "Python Backend Developer - CloudCo - Delhi, India | LinkedIn",
+                "content": "CloudCo hiring in Delhi. 4 days ago. Python, AWS, Docker.",
+                "publishedDate": "4 days ago"
+            }
+        ]
+
+        class MockSearXNGClient:
+            def search(self, query: str, pageno: int = 1):
+                return mock_raw_searxng_results
+
+        from agent.brain import QueryStrategy
+
+        class MockOllamaClient:
+            def generate_structured(self, prompt: str, schema=None, system: str = "", max_retries: int = 2):
+                if schema == QueryStrategy or (schema and getattr(schema, "__name__", "") == "QueryStrategy"):
+                    return QueryStrategy(
+                        query='site:linkedin.com/jobs/view "Python Developer" "Delhi" Python',
+                        rationale="Mocked query strategy for Python Developer in Delhi"
+                    )
+                # Return high score evaluation for candidate
+                return JobEvaluation(
+                    score=88,
+                    suitable=True,
+                    reasons=["Matches Python and Backend requirements in Delhi"],
+                    matched_skills=["Python", "FastAPI"],
+                    missing_skills=[]
+                )
+
+        class MockAvailabilityVerifier(JobAvailabilityVerifier):
+            def verify_batch(self, jobs):
+                for j in jobs:
+                    if "closed" in j.url or (j.description and "filled" in j.description):
+                        j.availability_status = "CLOSED"
+                    else:
+                        j.availability_status = "ACTIVE"
+                    j.availability_checked_at = datetime.now(timezone.utc).isoformat()
+                return jobs
+
+        # 2. Setup isolated temp sandbox to avoid writing to real sandbox directories
+        temp_dir = tempfile.TemporaryDirectory()
+        try:
+            mock_ollama = MockOllamaClient()
+            isolated_sandbox = Sandbox(root_dir=Path(temp_dir.name))
+            results_tool = ResultsTool(sandbox=isolated_sandbox)
+            memory_tool = MemoryTool(sandbox=isolated_sandbox)
+            evaluator = JobEvaluator(ollama_client=mock_ollama)
+
+            gs = GlobalSearch(searxng_client=MockSearXNGClient())
+            search_tool = SearchJobsTool(global_search=gs)
+
+            candidate = CandidateProfile(
+                customer_id="mock_user_1",
+                target_roles=["Python Developer", "Backend Engineer"],
+                skills=["Python", "FastAPI", "PostgreSQL"],
+                locations=["Delhi"],
+                work_modes=["remote", "hybrid"],
+                max_posting_age_days=7,
+                target_job_count=2
+            )
+            mission = SearchMission(
+                objective="Find Python Developer or Backend Engineer jobs in Delhi, remote or hybrid, posted within the last 7 days",
+                search_roles=["Python Developer", "Backend Engineer"],
+                locations=["Delhi"],
+                posting_age_days=7,
+                minimum_target_jobs=2,
+                max_iterations=3
+            )
+
+            brain = AutonomousBrain(
+                candidate=candidate,
+                mission=mission,
+                search_tool=search_tool,
+                memory_tool=memory_tool,
+                results_tool=results_tool,
+                evaluator=evaluator,
+                availability_verifier=MockAvailabilityVerifier(),
+                ollama_client=mock_ollama,
+                run_id="run_mock_test_0001"
+            )
+
+            # 3. Execute brain loop
+            accepted = brain.run()
+
+            # 4. Verify telemetry captured during the search step
+            telemetry = search_tool.last_telemetry
+            self.assertEqual(telemetry.raw_results, 10)
+            self.assertEqual(telemetry.provider_matches, 7)
+            self.assertEqual(telemetry.unmatched_urls, 3)
+            self.assertEqual(telemetry.parse_successes, 7)
+            self.assertEqual(telemetry.parse_failures, 0)
+
+            # 5. Verify filtering and acceptance
+            self.assertGreaterEqual(len(accepted), 2)
+            self.assertTrue(brain.is_stopped)
+
+            # Verify accepted jobs all match target roles, locations, and age <= 7
+            for job in accepted:
+                self.assertIn("Delhi", job.location)
+                self.assertLessEqual(job.posted_age_days, 7)
+                self.assertIn(job.url, [
+                    "https://linkedin.com/jobs/view/4467855631",
+                    "https://linkedin.com/jobs/view/4467855632",
+                    "https://linkedin.com/jobs/view/4467855633",
+                    "https://linkedin.com/jobs/view/4467855637"
+                ])
+
+            # Verify brain did not mutate roles to generic titles
+            self.assertEqual(candidate.target_roles, ["Python Developer", "Backend Engineer"])
+
+            # Verify persisted results in isolated sandbox
+            self.assertTrue(isolated_sandbox.exists("output", "runs/run_mock_test_0001/jobs.json"))
+            self.assertTrue(isolated_sandbox.exists("output", "runs/run_mock_test_0001/summary.json"))
+            summary = json.loads(isolated_sandbox.read_text("output", "runs/run_mock_test_0001/summary.json"))
+            self.assertGreaterEqual(summary["statistics"]["accepted"], 2)
+
+        finally:
+            temp_dir.cleanup()
+
 
 
 class TestRunLifecycleAndLogging(unittest.TestCase):

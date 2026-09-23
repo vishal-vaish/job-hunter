@@ -8,7 +8,7 @@ This file is responsible for:
   can be initiated by the agent or model.
 """
 
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from models.job import Job
 from search.global_search import GlobalSearch, default_global_search
 from utils.logger import get_logger
@@ -24,6 +24,17 @@ class SearchJobsTool:
 
     def __init__(self, global_search: Optional[GlobalSearch] = None) -> None:
         self.global_search = global_search or default_global_search
+
+    @property
+    def last_telemetry(self) -> Any:
+        """Returns the raw SearchTelemetry object from the last executed search."""
+        return getattr(self.global_search, "last_telemetry", None)
+
+    def get_last_telemetry(self) -> Dict[str, Any]:
+        """Returns a serializable dictionary of search execution metrics."""
+        if hasattr(self.global_search, "last_telemetry") and self.global_search.last_telemetry:
+            return self.global_search.last_telemetry.summary_dict()
+        return {}
 
     def execute(
         self,

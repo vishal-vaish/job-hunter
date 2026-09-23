@@ -11,7 +11,7 @@ This file is responsible for:
 """
 
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 from models.job import Job
@@ -68,7 +68,12 @@ class LinkedInProvider(BaseJobProvider):
 
     def is_provider_url(self, url: str) -> bool:
         """
-        Checks whether the URL belongs to LinkedIn and points to a job posting.
+        Checks whether the URL belongs to LinkedIn and points to a job posting or directory.
+        Accepts:
+          - https://www.linkedin.com/jobs/view/...
+          - https://[country].linkedin.com/jobs/view/...
+          - https://[country].linkedin.com/jobs/...
+        Rejects non-job LinkedIn sections (/feed, /in/, /company/, /school/, /pulse).
         """
         if not url:
             return False
@@ -76,8 +81,20 @@ class LinkedInProvider(BaseJobProvider):
         domain = parsed.netloc.lower()
         if "linkedin.com" not in domain:
             return False
-        # Matches job views, job postings, or job directory items
-        return "/jobs/view" in parsed.path or "/jobs/" in parsed.path
+
+        path = parsed.path.lower()
+
+        # Reject explicitly non-job LinkedIn paths
+        non_job_prefixes = (
+            "/feed", "/in/", "/company/", "/school/", "/pulse",
+            "/groups", "/events", "/login", "/signup", "/checkpoint", "/m/"
+        )
+        for prefix in non_job_prefixes:
+            if path.startswith(prefix) and "/jobs" not in path:
+                return False
+
+        # Matches job views, collections, search directories, and general job paths
+        return "/jobs/view" in path or path.startswith("/jobs") or "/jobs/" in path
 
     def clean_url(self, url: str) -> str:
         """
@@ -89,37 +106,61 @@ class LinkedInProvider(BaseJobProvider):
             return ""
 
         parsed = urlparse(url)
-        # Check for /jobs/view/<id>
-        match = re.search(r"(/jobs/view/(?:[^/?]+-)?(\d+))", parsed.path)
+        # Check for /jobs/view/<id> or /jobs/view/slug-<id>
+        match = re.search(r"/jobs/view/(?:[^/?#]+-)?(\d+)", parsed.path)
         if match:
             # Canonical standard format: https://www.linkedin.com/jobs/view/<id>
-            job_id = match.group(2)
+            job_id = match.group(1)
             return f"https://www.linkedin.com/jobs/view/{job_id}"
 
-        # If it's a generic /jobs/ path, strip all query and fragment tracking
-        # Whitelist only essential params if needed, or drop all tracking params
+        # If it's a generic /jobs/ path, strip tracking query parameters
         clean_parts = list(parsed)
-        clean_parts[4] = ""  # remove query params
+        if clean_parts[4]:
+            q_dict = parse_qs(clean_parts[4])
+            tracking_keys = {
+                "trackingid", "refid", "trk", "midtoken", "position",
+                "pagenum", "orig", "currentjobid", "originalsubdomain",
+                "geoid", "distance"
+            }
+            cleaned_q = {k: v for k, v in q_dict.items() if k.lower() not in tracking_keys}
+            clean_parts[4] = urlencode(cleaned_q, doseq=True)
         clean_parts[5] = ""  # remove fragment
         return urlunparse(clean_parts).rstrip("/")
 
-    def parse_result(self, raw_result: Dict[str, Any], search_query: str) -> Optional[Job]:
+    def parse_result_detailed(
+        self,
+        raw_result: Dict[str, Any],
+        search_query: str
+    ) -> Tuple[Optional[Job], Optional[str]]:
         """
-        Converts a SearXNG result item into a normalized Job model.
+        Converts a SearXNG result item into a normalized Job model with detailed failure rationale.
         Extracts title, company, and location using heuristic parsing of the search title and snippet.
+        Guarantees that results are never rejected merely because company or location is 'Unknown'.
         """
-        raw_url = raw_result.get("url", "")
+        raw_url = str(raw_result.get("url") or "").strip()
+        if not raw_url:
+            return None, "Missing or empty URL in raw search result"
+
         if not self.is_provider_url(raw_url):
-            return None
+            return None, f"URL '{raw_url}' is not a recognized LinkedIn job URL"
 
         canonical_url = self.clean_url(raw_url)
-        raw_title = raw_result.get("title", "").strip()
-        raw_content = raw_result.get("content", "").strip()
+        raw_title = str(raw_result.get("title") or "").strip()
+        raw_content = str(raw_result.get("content") or "").strip()
 
         # Clean common LinkedIn title suffixes
         # e.g. "Software Engineer - Acme Corp - Bengaluru | LinkedIn"
-        title_clean = re.sub(r"\s*\|\s*LinkedIn.*$", "", raw_title, flags=re.IGNORECASE)
-        title_clean = re.sub(r"\s*-\s*LinkedIn.*$", "", title_clean, flags=re.IGNORECASE)
+        title_clean = re.sub(r"\s*\|\s*LinkedIn.*$", "", raw_title, flags=re.IGNORECASE).strip()
+        title_clean = re.sub(r"\s*-\s*LinkedIn.*$", "", title_clean, flags=re.IGNORECASE).strip()
+
+        # If title is empty, attempt extraction from URL slug
+        if not title_clean:
+            parsed_path = urlparse(raw_url).path
+            slug_match = re.search(r"/jobs/view/([a-zA-Z0-9-]+)-\d+", parsed_path)
+            if slug_match:
+                title_clean = slug_match.group(1).replace("-", " ").title()
+            else:
+                title_clean = "Job Posting"
 
         company = "Unknown"
         location = "Unknown"
@@ -132,7 +173,7 @@ class LinkedInProvider(BaseJobProvider):
             job_title = hiring_match.group(2).strip()
             location = hiring_match.group(3).strip()
         else:
-            # Heuristic Pattern 2: "Role - Company - Location" or "Role at Company"
+            # Heuristic Pattern 2: "Role - Company - Location" or "Role - Company"
             if " - " in title_clean:
                 segments = [s.strip() for s in title_clean.split(" - ") if s.strip()]
                 if len(segments) >= 3:
@@ -145,23 +186,52 @@ class LinkedInProvider(BaseJobProvider):
             elif " at " in title_clean:
                 at_parts = title_clean.split(" at ", 1)
                 job_title = at_parts[0].strip()
-                company = at_parts[1].strip()
+                comp_part = at_parts[1].strip()
+                if " in " in comp_part:
+                    c_sub, l_sub = comp_part.split(" in ", 1)
+                    company = c_sub.strip()
+                    location = l_sub.strip()
+                else:
+                    company = comp_part
 
-        # Clean snippet content
-        description = raw_content
+        # Clean extraneous quotes
+        job_title = job_title.strip("\"' ")
+        company = company.strip("\"' ")
+        location = location.strip("\"' ")
 
-        return Job(
-            provider=self.name,
-            title=job_title,
-            company=company,
-            location=location,
-            url=canonical_url,
-            description=description,
-            posted_text=raw_result.get("publishedDate") or raw_result.get("pubdate"),
-            search_query=search_query,
-            metadata={
-                "engines": raw_result.get("engines", []),
-                "score": raw_result.get("score", 0.0),
-                "original_title": raw_title
-            }
-        )
+        # Extract posted date string if present
+        posted_raw = raw_result.get("publishedDate") or raw_result.get("pubdate")
+        posted_text = str(posted_raw) if posted_raw is not None else None
+        if not posted_text and raw_content:
+            date_match = re.search(r"\b(\d+\s+(?:days?|weeks?|months?|hours?)\s+ago)\b", raw_content, re.IGNORECASE)
+            if date_match:
+                posted_text = date_match.group(1)
+
+        try:
+            job = Job(
+                provider=self.name,
+                title=job_title or "Job Posting",
+                company=company or "Unknown",
+                location=location or "Unknown",
+                url=canonical_url,
+                description=raw_content,
+                posted_text=posted_text,
+                search_query=search_query,
+                metadata={
+                    "engines": raw_result.get("engines", []),
+                    "score": raw_result.get("score", 0.0),
+                    "original_title": raw_title
+                }
+            )
+            return job, None
+        except Exception as e:
+            logger.warning(f"Failed to instantiate Job model for '{canonical_url}': {e}")
+            return None, f"Job model validation error: {e}"
+
+    def parse_result(self, raw_result: Dict[str, Any], search_query: str) -> Optional[Job]:
+        """
+        Converts a SearXNG result item into a normalized Job model.
+        Returns None if parsing fails.
+        """
+        job, _ = self.parse_result_detailed(raw_result, search_query=search_query)
+        return job

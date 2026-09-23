@@ -186,11 +186,43 @@ class AutonomousBrain:
 
         last_stats = observation["last_iteration_stats"]
         raw_count = last_stats.get("raw_count", 0)
+        search_raw_results = last_stats.get("search_raw_results", 0)
+        search_provider_matches = last_stats.get("search_provider_matches", 0)
+        search_parse_failures = last_stats.get("search_parse_failures", 0)
+        search_unmatched_urls = last_stats.get("search_unmatched_urls", 0)
         dup_count = last_stats.get("duplicate_count", 0)
         filter_rej = last_stats.get("filter_rejected_count", 0)
         eval_count = last_stats.get("evaluated_count", 0)
         accepted_last = last_stats.get("accepted_count", 0)
         dominant_rej = str(last_stats.get("dominant_rejection_reason", ""))
+
+        # Case B1: Provider domain mismatch (SearXNG returned results, but none matched allowed providers)
+        if raw_count == 0 and search_raw_results > 0 and search_provider_matches == 0:
+            diagnosis = (
+                f"Provider domain mismatch: Search engine returned {search_raw_results} results, but none matched "
+                f"allowed job provider URLs ({search_unmatched_urls} unmatched). Adjusting search syntax to strictly "
+                f"target provider domains without mutating candidate target roles {self.candidate.target_roles}."
+            )
+            logger.info(f"[DIAGNOSE] {diagnosis}")
+            return diagnosis
+
+        # Case B2: Provider parse failure (Discovered provider URLs, but parser failed to extract Job models)
+        if raw_count == 0 and search_provider_matches > 0 and search_parse_failures > 0:
+            diagnosis = (
+                f"Provider parsing failure: Discovered {search_provider_matches} provider results, but {search_parse_failures} "
+                f"failed to parse into valid Job listings. Recording provider parsing anomaly without mutating candidate target roles."
+            )
+            logger.info(f"[DIAGNOSE] {diagnosis}")
+            return diagnosis
+
+        # Case A: True zero search yield (Search engine returned 0 raw results)
+        if raw_count == 0 and search_raw_results == 0:
+            diagnosis = (
+                f"Zero search results returned by search engine: Query was too specific or search terms too constrained. "
+                "Broadening search terms or alternating between candidate target roles."
+            )
+            logger.info(f"[DIAGNOSE] {diagnosis}")
+            return diagnosis
 
         # Case 3: Freshness / Availability friction
         if raw_count > 0 and (filter_rej / raw_count) > 0.4 and (
@@ -204,8 +236,8 @@ class AutonomousBrain:
             logger.info(f"[DIAGNOSE] {diagnosis}")
             return diagnosis
 
-        # Case 4: Zero or extremely low search yield
-        if raw_count < 3:
+        # Case 4: Low search yield (1-2 results)
+        if 0 < raw_count < 3:
             diagnosis = (
                 f"Low search yield ({raw_count} results): Query was too specific or search terms too constrained. "
                 "Need to broaden role terminology and remove secondary keyword filters."
@@ -291,13 +323,19 @@ class AutonomousBrain:
             "Analyze the candidate profile, previous searched queries, and the current diagnosis.\n"
             "Formulate a NEW search query specifically formatted for LinkedIn discovery via search engines.\n"
             "Format queries like: site:linkedin.com/jobs/view \"Role Title\" Location Keyword\n"
-            "Rules:\n"
-            "1. Do NOT repeat any previously searched query.\n"
-            "2. Adapt based on the diagnosis (broaden if yield was low, change keywords if duplicates high, "
+            "STRICT RULES:\n"
+            f"1. Target Roles are strictly: {self.candidate.target_roles}. "
+            "You must search for one of the candidate's requested target roles or direct technical specializations "
+            "(e.g. 'Python Backend Developer' for 'Python Developer'). "
+            "NEVER mutate roles into unrelated or overly generic titles such as 'Software Developer', 'Software Professional', or 'Programmer'.\n"
+            f"2. Respect OR semantics: If multiple roles are provided (e.g. {self.candidate.target_roles}), "
+            "alternate searches between each individual role rather than requiring both simultaneously.\n"
+            "3. Do NOT repeat any previously searched query.\n"
+            "4. Adapt based on the diagnosis (broaden keywords if yield was low, change keywords if duplicates high, "
             "add seniority markers if experience mismatched).\n"
-            f"3. The candidate has a strict hard freshness constraint of {self.mission.posting_age_days} days. "
+            f"5. The candidate has a strict hard freshness constraint of {self.mission.posting_age_days} days. "
             "NEVER attempt to relax or broaden the posting age limit.\n"
-            "4. Output valid JSON conforming to the QueryStrategy schema."
+            "6. Output valid JSON conforming to the QueryStrategy schema."
         )
 
         user_prompt = (
@@ -393,19 +431,40 @@ class AutonomousBrain:
             query=query,
             allowed_providers=self.mission.allowed_providers
         )
+        telemetry = self.search_tool.get_last_telemetry()
+        search_raw_results = telemetry.get("raw_results", 0)
+        search_provider_matches = telemetry.get("provider_matches", 0)
+        search_parse_failures = telemetry.get("parse_failures", 0)
+        search_unmatched_urls = telemetry.get("unmatched_urls", 0)
+
         raw_count = len(raw_jobs)
         self.run_statistics["discovered"] += raw_count
 
         if raw_count == 0:
-            logger.warning(f"[ACT] Query '{query}' yielded zero results.")
+            if search_raw_results > 0 and search_provider_matches == 0:
+                dominant_reason = f"Provider domain mismatch ({search_raw_results} raw results, 0 matched provider URLs)"
+                logger.warning(f"[ACT] Query '{query}' yielded zero jobs: {dominant_reason}.")
+            elif search_raw_results > 0 and search_parse_failures > 0:
+                dominant_reason = f"Provider parse failure ({search_parse_failures}/{search_provider_matches} failed to parse)"
+                logger.warning(f"[ACT] Query '{query}' yielded zero jobs: {dominant_reason}.")
+            else:
+                dominant_reason = "Search engine returned 0 results"
+                logger.warning(f"[ACT] Query '{query}' yielded zero results from search engine.")
+
             self.memory_tool.memory.failed_queries.append(query)
             return {
+                "query": query,
                 "raw_count": 0,
+                "search_raw_results": search_raw_results,
+                "search_provider_matches": search_provider_matches,
+                "search_parse_failures": search_parse_failures,
+                "search_unmatched_urls": search_unmatched_urls,
                 "duplicate_count": 0,
                 "filter_rejected_count": 0,
                 "evaluated_count": 0,
                 "accepted_count": 0,
-                "dominant_rejection_reason": "No search results returned"
+                "low_score_count": 0,
+                "dominant_rejection_reason": dominant_reason
             }
 
         # 3. Normalize (Cleans text, extracts posting age and date confidence)
@@ -557,6 +616,10 @@ class AutonomousBrain:
         iteration_metrics = {
             "query": query,
             "raw_count": raw_count,
+            "search_raw_results": search_raw_results,
+            "search_provider_matches": search_provider_matches,
+            "search_parse_failures": search_parse_failures,
+            "search_unmatched_urls": search_unmatched_urls,
             "duplicate_count": duplicate_count,
             "filter_rejected_count": filter_rejected_count,
             "evaluated_count": len(passed_jobs),

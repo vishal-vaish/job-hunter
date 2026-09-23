@@ -11,7 +11,7 @@ This file is responsible for:
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from models.job import Job
 
 
@@ -60,3 +60,18 @@ class BaseJobProvider(ABC):
         Returns None if the result cannot be parsed as a valid job posting.
         """
         pass
+
+    def parse_result_detailed(
+        self,
+        raw_result: Dict[str, Any],
+        search_query: str
+    ) -> Tuple[Optional[Job], Optional[str]]:
+        """
+        Converts a raw SearXNG result dictionary into a normalized Job model,
+        or returns (None, failure_reason) explaining why it could not be parsed.
+        Default implementation delegates to parse_result.
+        """
+        job = self.parse_result(raw_result, search_query=search_query)
+        if job:
+            return job, None
+        return None, "Provider parse_result returned None"
