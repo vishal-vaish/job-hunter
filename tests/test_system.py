@@ -1021,6 +1021,73 @@ class TestCandidateRepositoryAndCLI(unittest.TestCase):
         self.assertEqual(summary_data["customer_id"], "12345")
         self.assertEqual(summary_data["search_prompt"], "Find Fullstack jobs")
 
+    def test_check_prerequisites_both_online(self):
+        from main import check_prerequisites
+        class MockOllama:
+            base_url = "http://localhost:11434"
+            model = "llama3.1:8b"
+            def check_health(self):
+                return True
+
+        class MockSearXNG:
+            base_url = "http://localhost:8081"
+            def check_health(self):
+                return True
+
+        self.assertTrue(check_prerequisites(MockOllama(), MockSearXNG()))
+
+    def test_check_prerequisites_ollama_offline(self):
+        from main import check_prerequisites
+        class MockOllama:
+            base_url = "http://localhost:11434"
+            def check_health(self):
+                return False
+
+        class MockSearXNG:
+            base_url = "http://localhost:8081"
+            def check_health(self):
+                return True
+
+        self.assertFalse(check_prerequisites(MockOllama(), MockSearXNG()))
+        with self.assertRaises(SystemExit) as ctx:
+            check_prerequisites(MockOllama(), MockSearXNG(), exit_on_failure=True)
+        self.assertEqual(ctx.exception.code, 1)
+
+    def test_check_prerequisites_searxng_offline(self):
+        from main import check_prerequisites
+        class MockOllama:
+            base_url = "http://localhost:11434"
+            model = "llama3.1:8b"
+            def check_health(self):
+                return True
+
+        class MockSearXNG:
+            base_url = "http://localhost:8081"
+            def check_health(self):
+                return False
+
+        self.assertFalse(check_prerequisites(MockOllama(), MockSearXNG()))
+        with self.assertRaises(SystemExit) as ctx:
+            check_prerequisites(MockOllama(), MockSearXNG(), exit_on_failure=True)
+        self.assertEqual(ctx.exception.code, 1)
+
+    def test_check_prerequisites_both_offline(self):
+        from main import check_prerequisites
+        class MockOllama:
+            base_url = "http://localhost:11434"
+            def check_health(self):
+                return False
+
+        class MockSearXNG:
+            base_url = "http://localhost:8081"
+            def check_health(self):
+                return False
+
+        self.assertFalse(check_prerequisites(MockOllama(), MockSearXNG()))
+        with self.assertRaises(SystemExit) as ctx:
+            check_prerequisites(MockOllama(), MockSearXNG(), exit_on_failure=True)
+        self.assertEqual(ctx.exception.code, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

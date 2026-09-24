@@ -43,34 +43,79 @@ from storage.candidate_repository import (
 from utils.logger import setup_logger, get_logger, generate_run_id, close_run_logger
 
 
-def check_prerequisites(ollama: OllamaClient, searxng: SearXNGClient, logger) -> bool:
+def check_prerequisites(
+    ollama: OllamaClient,
+    searxng: SearXNGClient,
+    logger=None,
+    exit_on_failure: bool = False
+) -> bool:
     """
     Checks that local Ollama and SearXNG instances are reachable.
-    Logs clear actionable warnings if either service is offline.
+    Enforces a strict infrastructure prerequisite guard:
+    - Verifies Ollama is responsive at ollama.base_url.
+    - Verifies SearXNG is responsive at searxng.base_url.
+
+    If either service is offline:
+    - Collects offline services and provides clear remediation instructions.
+    - Logs fatal error diagnostics.
+    - Outputs a formatted warning banner to sys.stderr.
+    - If exit_on_failure=True, immediately terminates the process with exit code 1.
+    - Returns False, preventing any further execution.
     """
-    logger.info("Verifying local infrastructure status...")
+    if logger:
+        logger.info("Verifying local infrastructure status...")
+
+    missing_services = []
 
     ollama_ok = ollama.check_health()
     searxng_ok = searxng.check_health()
 
     if ollama_ok:
-        logger.info(f"Ollama is reachable at {ollama.base_url} (Model: {ollama.model})")
+        if logger:
+            logger.info(f"Ollama is reachable at {ollama.base_url} (Model: {ollama.model})")
     else:
-        logger.warning(
+        msg = (
             f"Ollama is not reachable at {ollama.base_url}. "
-            "Please ensure Ollama is running (`ollama serve`). "
-            "System will attempt heuristic fallback if needed."
+            "Please ensure Ollama is installed and running (`ollama serve`)."
         )
+        missing_services.append(msg)
+        if logger:
+            logger.error(f"[PREREQUISITE_FAILED] {msg}")
 
     if searxng_ok:
-        logger.info(f"SearXNG is reachable at {searxng.base_url}")
+        if logger:
+            logger.info(f"SearXNG is reachable at {searxng.base_url}")
     else:
-        logger.warning(
+        msg = (
             f"SearXNG is not reachable at {searxng.base_url}. "
             "Please ensure SearXNG is running on port 8081."
         )
+        missing_services.append(msg)
+        if logger:
+            logger.error(f"[PREREQUISITE_FAILED] {msg}")
 
-    return ollama_ok and searxng_ok
+    if missing_services:
+        banner = [
+            "",
+            "=================================================================",
+            " [!] PREREQUISITE ERROR: REQUIRED LOCAL SERVICES OFFLINE",
+            "=================================================================",
+            "The Autonomous Job Hunter cannot operate without its local infrastructure:"
+        ]
+        for s in missing_services:
+            banner.append(f"  - {s}")
+        banner.extend([
+            "",
+            "Cannot proceed further. Execution halted.",
+            "=================================================================",
+            ""
+        ])
+        sys.stderr.write("\n".join(banner) + "\n")
+        if exit_on_failure:
+            sys.exit(1)
+        return False
+
+    return True
 
 
 def run_pipeline(
@@ -124,8 +169,15 @@ def run_pipeline(
         ollama_client = OllamaClient()
         searxng_client = SearXNGClient()
 
-        # 4. Check Prerequisites
-        check_prerequisites(ollama_client, searxng_client, logger)
+        # 4. Check Prerequisites (Hard Block)
+        if not check_prerequisites(ollama_client, searxng_client, logger):
+            error_msg = "Prerequisites check failed: Local infrastructure (Ollama and/or SearXNG) is not reachable."
+            logger.error(f"[FATAL] {error_msg} Aborting run.")
+            run_record["status"] = "FAILED"
+            run_record["error"] = error_msg
+            run_record["completed_at"] = datetime.now(timezone.utc).isoformat()
+            results_tool.save_run_record(run_id, run_record)
+            sys.exit(1)
 
         logger.info(
             f"Candidate loaded: Target Roles={candidate.target_roles}, "
@@ -266,6 +318,10 @@ def main() -> None:
             sys.exit(1)
 
         ollama_client = OllamaClient()
+        searxng_client = SearXNGClient()
+        if not check_prerequisites(ollama_client, searxng_client, exit_on_failure=True):
+            sys.exit(1)
+
         try:
             candidate = ProfileValidator.from_prompt(search_prompt, ollama_client=ollama_client)
         except Exception as e:
@@ -294,6 +350,11 @@ def main() -> None:
             sys.stderr.write(f"Unexpected error loading candidate '{customer_id}': {e}\n")
             sys.exit(1)
 
+        ollama_client = OllamaClient()
+        searxng_client = SearXNGClient()
+        if not check_prerequisites(ollama_client, searxng_client, exit_on_failure=True):
+            sys.exit(1)
+
         run_pipeline(
             candidate=candidate,
             customer_id=customer_id,
@@ -303,6 +364,11 @@ def main() -> None:
 
     else:
         # MODE 1: Interactive Prompt Mode (Customer-independent)
+        ollama_client = OllamaClient()
+        searxng_client = SearXNGClient()
+        if not check_prerequisites(ollama_client, searxng_client, exit_on_failure=True):
+            sys.exit(1)
+
         print("=== Autonomous Job Hunter ===")
         try:
             while True:
@@ -335,7 +401,6 @@ def main() -> None:
             print("\nExecution cancelled.")
             sys.exit(0)
 
-        ollama_client = OllamaClient()
         try:
             candidate = ProfileValidator.from_prompt(prompt_input, ollama_client=ollama_client)
         except Exception as e:

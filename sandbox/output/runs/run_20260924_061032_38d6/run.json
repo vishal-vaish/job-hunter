@@ -1,0 +1,26 @@
+{
+  "run_id": "run_20260924_061032_38d6",
+  "customer_id": "adhoc_user",
+  "search_prompt": "Find Python Developer or Backend Engineer jobs in Delhi, remote or hybrid, posted within the last 7 days",
+  "status": "completed",
+  "started_at": "2026-09-24T06:10:32.800568+00:00",
+  "completed_at": "2026-09-24T06:11:59.439244+00:00",
+  "duration_seconds": 86,
+  "candidate": {
+    "target_job_count": 10,
+    "max_posting_age_days": 7,
+    "target_roles": [
+      "Python Developer",
+      "Backend Engineer"
+    ],
+    "locations": [
+      "Delhi"
+    ],
+    "work_modes": [
+      "remote",
+      "hybrid"
+    ]
+  },
+  "iterations": 10,
+  "error": null
+}
