@@ -226,11 +226,12 @@ class TestFreshnessAndAvailability(unittest.TestCase):
         )
         self.assertFalse(pass_removed)
 
-        # UNKNOWN -> rejected by default
-        pass_unknown, _ = HardFilterEngine.is_available(
+        # UNKNOWN -> accepted as unverified
+        pass_unknown, reason_unknown = HardFilterEngine.is_available(
             Job(provider="linkedin", title="Dev", url="https://u5", availability_status="UNKNOWN")
         )
-        self.assertFalse(pass_unknown)
+        self.assertTrue(pass_unknown)
+        self.assertIn("UNVERIFIED", reason_unknown)
 
     def test_latest_first_sorting(self):
         jobs = [
@@ -280,6 +281,97 @@ class TestFreshnessAndAvailability(unittest.TestCase):
         verified = verifier.verify_job(closed_job)
         self.assertEqual(verified.availability_status, "CLOSED")
         self.assertIsNotNone(verified.availability_checked_at)
+
+    def test_extract_html_posting_date(self):
+        # 1. LinkedIn posted-time-ago__text in topcard
+        html_linkedin = """
+        <div class="topcard__flavor-row">
+            <span class="posted-time-ago__text topcard__flavor--metadata">
+                7 months ago
+            </span>
+        </div>
+        """
+        extracted = JobAvailabilityVerifier.extract_html_posting_date(html_linkedin)
+        self.assertEqual(extracted, "7 months ago")
+
+        # 2. JSON-LD datePosted
+        html_jsonld = '<script type="application/ld+json">{"@type":"JobPosting","datePosted":"2026-09-20T12:00:00Z"}</script>'
+        extracted_jsonld = JobAvailabilityVerifier.extract_html_posting_date(html_jsonld)
+        self.assertEqual(extracted_jsonld, "2026-09-20T12:00:00Z")
+
+        # 3. HTML5 <time> tag
+        html_time = '<time datetime="2026-09-22">2 days ago</time>'
+        extracted_time = JobAvailabilityVerifier.extract_html_posting_date(html_time)
+        self.assertEqual(extracted_time, "2026-09-22")
+
+        # 4. None when no date element present
+        html_none = '<div><p>Just a description</p></div>'
+        self.assertIsNone(JobAvailabilityVerifier.extract_html_posting_date(html_none))
+
+    def test_verify_job_prefers_html_element_and_rejects_stale_job(self):
+        from unittest.mock import patch, MagicMock
+        verifier = JobAvailabilityVerifier()
+        # Job initially marked 0d ago from snippet timestamp
+        job = Job(
+            provider="linkedin",
+            title="Python Developer for Darwin Labs",
+            company="Darwin Labs",
+            location="Delhi",
+            url="https://linkedin.com/jobs/view/4369633525",
+            posted_text="11 hours ago",
+            posted_age_days=0,
+            availability_status="UNKNOWN"
+        )
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.url = job.url
+        mock_resp.text = """
+        <html>
+            <body>
+                <span class="posted-time-ago__text topcard__flavor--metadata">
+                    7 months ago
+                </span>
+                <button id="topbar-apply">Apply</button>
+            </body>
+        </html>
+        """
+        with patch.object(verifier.session, "get", return_value=mock_resp):
+            verified = verifier.verify_job(job)
+
+        # Verified should have extracted 7 months ago from HTML element
+        self.assertEqual(verified.posted_text, "7 months ago")
+        self.assertEqual(verified.posted_age_days, 210)
+        self.assertEqual(verified.availability_status, "ACTIVE")
+
+        # HardFilterEngine must reject this job when max_age_days=7
+        passed, reason = HardFilterEngine.matches_posting_age(verified, max_age_days=7)
+        self.assertFalse(passed)
+        self.assertIn("exceeds maximum allowed", reason)
+
+    def test_verify_job_falls_back_to_timestamp_when_html_date_missing(self):
+        from unittest.mock import patch, MagicMock
+        verifier = JobAvailabilityVerifier()
+        job = Job(
+            provider="linkedin",
+            title="Python Developer",
+            company="Acme",
+            location="Delhi",
+            url="https://linkedin.com/jobs/view/12345",
+            posted_text="2 days ago",
+            posted_age_days=2,
+            availability_status="UNKNOWN"
+        )
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.url = job.url
+        mock_resp.text = "<html><body><button>Apply</button></body></html>"
+        with patch.object(verifier.session, "get", return_value=mock_resp):
+            verified = verifier.verify_job(job)
+
+        # Retains existing timestamp because HTML element was not present
+        self.assertEqual(verified.posted_text, "2 days ago")
+        self.assertEqual(verified.posted_age_days, 2)
+        self.assertEqual(verified.availability_status, "ACTIVE")
 
 
 class TestProviders(unittest.TestCase):
@@ -1087,6 +1179,72 @@ class TestCandidateRepositoryAndCLI(unittest.TestCase):
         with self.assertRaises(SystemExit) as ctx:
             check_prerequisites(MockOllama(), MockSearXNG(), exit_on_failure=True)
         self.assertEqual(ctx.exception.code, 1)
+
+    def test_run_pipeline_records_failed_on_prerequisite_failure(self):
+        from main import run_pipeline
+        class MockFailOllama:
+            base_url = "http://localhost:11434"
+            def check_health(self):
+                return False
+
+        class MockSearXNG:
+            base_url = "http://localhost:8081"
+            def check_health(self):
+                return True
+
+        cand = CandidateProfile(
+            customer_id="test_cust",
+            target_roles=["Python Developer"]
+        )
+        run_id = generate_run_id()
+        with self.assertRaises(SystemExit) as ctx:
+            run_pipeline(
+                candidate=cand,
+                customer_id="test_cust",
+                custom_run_id=run_id,
+                ollama_client=MockFailOllama(),
+                searxng_client=MockSearXNG(),
+                sandbox=self.sandbox
+            )
+        self.assertEqual(ctx.exception.code, 1)
+        self.assertTrue(self.sandbox.exists("output", f"runs/{run_id}/run.json"))
+        run_data = json.loads(self.sandbox.read_text("output", f"runs/{run_id}/run.json"))
+        self.assertEqual(run_data["status"], "failed")
+
+    def test_run_pipeline_keyboard_interrupt_records_interrupted(self):
+        from main import run_pipeline
+        from unittest.mock import patch
+
+        class MockGoodOllama:
+            base_url = "http://localhost:11434"
+            model = "llama3.1:8b"
+            def check_health(self):
+                return True
+
+        class MockGoodSearXNG:
+            base_url = "http://localhost:8081"
+            def check_health(self):
+                return True
+
+        cand = CandidateProfile(
+            customer_id="test_cust",
+            target_roles=["Python Developer"]
+        )
+        run_id = generate_run_id()
+        with patch("main.MissionGenerator.generate_mission", side_effect=KeyboardInterrupt()):
+            with self.assertRaises(SystemExit) as ctx:
+                run_pipeline(
+                    candidate=cand,
+                    customer_id="test_cust",
+                    custom_run_id=run_id,
+                    ollama_client=MockGoodOllama(),
+                    searxng_client=MockGoodSearXNG(),
+                    sandbox=self.sandbox
+                )
+            self.assertEqual(ctx.exception.code, 0)
+        self.assertTrue(self.sandbox.exists("output", f"runs/{run_id}/run.json"))
+        run_data = json.loads(self.sandbox.read_text("output", f"runs/{run_id}/run.json"))
+        self.assertEqual(run_data["status"], "interrupted")
 
 
 if __name__ == "__main__":

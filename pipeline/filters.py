@@ -108,14 +108,43 @@ class HardFilterEngine:
     @staticmethod
     def is_available(job: Job) -> Tuple[bool, Optional[str]]:
         """
-        Enforces availability constraint:
-        - Must have status 'ACTIVE'.
-        - 'CLOSED', 'EXPIRED', 'REMOVED', or 'UNKNOWN' are rejected.
-        """
-        if job.availability_status != "ACTIVE":
-            return False, f"Job availability is '{job.availability_status}', required 'ACTIVE'"
+        Availability policy:
 
-        return True, None
+        ACTIVE
+            -> accepted
+
+        UNKNOWN
+            -> accepted as unverified
+
+        CLOSED / EXPIRED / REMOVED
+            -> rejected
+
+        IMPORTANT:
+        UNKNOWN does NOT mean ACTIVE.
+        It means direct verification could not establish the status.
+
+        A fresh UNKNOWN job can continue to LLM evaluation because
+        discovery/search-engine evidence is still useful, while explicit
+        closed/removed jobs are blocked.
+        """
+
+        status = (job.availability_status or "UNKNOWN").upper()
+
+        if status in {"CLOSED", "EXPIRED", "REMOVED"}:
+            return False, f"Job availability is '{status}'"
+
+        if status == "UNKNOWN":
+            return True, (
+                "Availability could not be directly verified; "
+                "retaining fresh job for evaluation as UNVERIFIED"
+            )
+
+        if status == "ACTIVE":
+            return True, None
+
+        # Defensive handling for unexpected values.
+        return False, f"Unsupported job availability status '{status}'"
+
 
     @classmethod
     def evaluate(cls, job: Job, mission: SearchMission) -> Tuple[bool, Optional[str]]:

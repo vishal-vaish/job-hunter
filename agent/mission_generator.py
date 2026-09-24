@@ -61,9 +61,30 @@ class MissionGenerator:
 
         if search_prompt:
             user_prompt += (
-                f"\nSpecific Search Request for this Run:\n"
-                f"\"{search_prompt}\"\n"
-                f"Prioritize this search request in the objective, roles, and keywords while respecting the candidate profile.\n"
+                f"""
+                Specific Search Request for this Run:
+                
+                "{search_prompt}"
+                
+                IMPORTANT SEARCH CONSTRAINTS:
+                
+                The search request above contains explicit user requirements.
+                
+                Treat the following as HARD constraints:
+                
+                - Requested job roles must be preserved.
+                - Requested locations must be preserved.
+                - Requested work modes must be preserved.
+                - Requested posting-age limit must be preserved.
+                - Do not replace a requested role with an unrelated role.
+                - Do not add new locations that were not requested.
+                - Do not remove one of the requested roles merely because another role appears more common.
+                - Technical skills may be used to improve search precision, but they must not override the user's requested role/location/work-mode constraints.
+                - The posting-age limit must never be relaxed.
+                
+                The SearchMission should represent the user's actual request,
+                not merely the candidate profile.
+                """
             )
 
         user_prompt += "\nGenerate a SearchMission JSON object that adheres strictly to the schema."
@@ -75,6 +96,28 @@ class MissionGenerator:
                 system=system_prompt,
                 max_retries=2
             )
+
+            # Never allow the LLM to reduce autonomous search to a
+            # single iteration unless the application explicitly
+            # configures that behavior.
+            configured_max_iterations = settings.default_max_iterations
+
+            if configured_max_iterations < 2:
+                configured_max_iterations = 5
+
+            mission.max_iterations = max(
+                2,
+                min(
+                    mission.max_iterations,
+                    configured_max_iterations,
+                )
+            )
+
+            logger.info(
+                f"Mission iteration budget normalized: "
+                f"max_iterations={mission.max_iterations}"
+            )
+
             # Enforce mission bounds matching candidate constraints
             mission.allowed_providers = candidate.job_providers or ["linkedin"]
             mission.minimum_target_jobs = candidate.target_job_count

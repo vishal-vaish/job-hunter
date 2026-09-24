@@ -24,7 +24,7 @@ import argparse
 from datetime import datetime, timezone
 from pathlib import Path
 import sys
-from typing import Optional
+from typing import Optional, Any
 
 from agent.brain import AutonomousBrain
 from agent.mission_generator import MissionGenerator
@@ -47,7 +47,8 @@ def check_prerequisites(
     ollama: OllamaClient,
     searxng: SearXNGClient,
     logger=None,
-    exit_on_failure: bool = False
+    exit_on_failure: bool = False,
+    print_banner: Optional[bool] = None
 ) -> bool:
     """
     Checks that local Ollama and SearXNG instances are reachable.
@@ -58,7 +59,7 @@ def check_prerequisites(
     If either service is offline:
     - Collects offline services and provides clear remediation instructions.
     - Logs fatal error diagnostics.
-    - Outputs a formatted warning banner to sys.stderr.
+    - Outputs a formatted warning banner to sys.stderr (when print_banner is True or exit_on_failure is True).
     - If exit_on_failure=True, immediately terminates the process with exit code 1.
     - Returns False, preventing any further execution.
     """
@@ -94,23 +95,26 @@ def check_prerequisites(
         if logger:
             logger.error(f"[PREREQUISITE_FAILED] {msg}")
 
+    should_print = print_banner if print_banner is not None else exit_on_failure
+
     if missing_services:
-        banner = [
-            "",
-            "=================================================================",
-            " [!] PREREQUISITE ERROR: REQUIRED LOCAL SERVICES OFFLINE",
-            "=================================================================",
-            "The Autonomous Job Hunter cannot operate without its local infrastructure:"
-        ]
-        for s in missing_services:
-            banner.append(f"  - {s}")
-        banner.extend([
-            "",
-            "Cannot proceed further. Execution halted.",
-            "=================================================================",
-            ""
-        ])
-        sys.stderr.write("\n".join(banner) + "\n")
+        if should_print:
+            banner = [
+                "",
+                "=================================================================",
+                " [!] PREREQUISITE ERROR: REQUIRED LOCAL SERVICES OFFLINE",
+                "=================================================================",
+                "The Autonomous Job Hunter cannot operate without its local infrastructure:"
+            ]
+            for s in missing_services:
+                banner.append(f"  - {s}")
+            banner.extend([
+                "",
+                "Cannot proceed further. Execution halted.",
+                "=================================================================",
+                ""
+            ])
+            sys.stderr.write("\n".join(banner) + "\n")
         if exit_on_failure:
             sys.exit(1)
         return False
@@ -122,7 +126,11 @@ def run_pipeline(
     candidate: CandidateProfile,
     customer_id: str,
     search_prompt: Optional[str] = None,
-    custom_run_id: Optional[str] = None
+    custom_run_id: Optional[str] = None,
+    ollama_client: Optional[OllamaClient] = None,
+    searxng_client: Optional[SearXNGClient] = None,
+    results_tool: Optional[ResultsTool] = None,
+    sandbox: Optional[Any] = None
 ) -> None:
     """
     Runs the complete autonomous job hunting pipeline enforcing the per-run lifecycle.
@@ -132,8 +140,8 @@ def run_pipeline(
     start_time = datetime.now(timezone.utc)
 
     # 2. Configure per-run logger (sandbox/logs/<run_id>.log and console)
-    logger = setup_logger("main", run_id=run_id)
-    results_tool = ResultsTool()
+    logger = setup_logger("main", run_id=run_id, sandbox=sandbox)
+    results_tool = results_tool or ResultsTool(sandbox=sandbox)
 
     logger.info("=================================================================")
     logger.info(f"             AUTONOMOUS JOB HUNTER - STARTING [{run_id}]        ")
@@ -165,15 +173,15 @@ def run_pipeline(
     results_tool.save_run_record(run_id, run_record)
 
     try:
-        # 3. Initialize Infrastructure Clients
-        ollama_client = OllamaClient()
-        searxng_client = SearXNGClient()
+        # 3. Initialize Infrastructure Clients (reuse passed instances or instantiate)
+        ollama = ollama_client or OllamaClient()
+        searxng = searxng_client or SearXNGClient()
 
         # 4. Check Prerequisites (Hard Block)
-        if not check_prerequisites(ollama_client, searxng_client, logger):
+        if not check_prerequisites(ollama, searxng, logger):
             error_msg = "Prerequisites check failed: Local infrastructure (Ollama and/or SearXNG) is not reachable."
             logger.error(f"[FATAL] {error_msg} Aborting run.")
-            run_record["status"] = "FAILED"
+            run_record["status"] = "failed"
             run_record["error"] = error_msg
             run_record["completed_at"] = datetime.now(timezone.utc).isoformat()
             results_tool.save_run_record(run_id, run_record)
@@ -187,7 +195,7 @@ def run_pipeline(
 
         # 5. Generate Mission
         logger.info("Generating Search Mission...")
-        mission_gen = MissionGenerator(ollama_client)
+        mission_gen = MissionGenerator(ollama)
         mission = mission_gen.generate_mission(candidate, search_prompt=search_prompt)
         logger.info(f"Mission generated: Objective='{mission.objective}'")
         logger.info(
@@ -199,7 +207,7 @@ def run_pipeline(
         brain = AutonomousBrain(
             candidate=candidate,
             mission=mission,
-            ollama_client=ollama_client,
+            ollama_client=ollama,
             run_id=run_id,
             search_prompt=search_prompt
         )
@@ -237,10 +245,22 @@ def run_pipeline(
         logger.info(f"Run log saved to:            sandbox/logs/{run_id}.log")
         logger.info(f"RUN_COMPLETED: {run_id}")
 
+    except KeyboardInterrupt:
+        end_time = datetime.now(timezone.utc)
+        duration = int((end_time - start_time).total_seconds())
+        run_record["status"] = "interrupted"
+        run_record["completed_at"] = end_time.isoformat()
+        run_record["duration_seconds"] = duration
+        run_record["error"] = "Execution cancelled by user (KeyboardInterrupt)"
+        results_tool.save_run_record(run_id, run_record)
+        logger.warning(f"RUN_INTERRUPTED: {run_id} cancelled by user.")
+        print("\n[!] Execution cancelled by user.")
+        sys.exit(0)
+
     except Exception as e:
         end_time = datetime.now(timezone.utc)
         duration = int((end_time - start_time).total_seconds())
-        run_record["status"] = "interrupted" if isinstance(e, KeyboardInterrupt) else "failed"
+        run_record["status"] = "failed"
         run_record["completed_at"] = end_time.isoformat()
         run_record["duration_seconds"] = duration
         run_record["error"] = str(e)
@@ -328,11 +348,14 @@ def main() -> None:
             sys.stderr.write(f"Failed to generate profile from prompt: {e}\n")
             sys.exit(1)
 
+        candidate.customer_id = "prompt_user"
         run_pipeline(
             candidate=candidate,
             customer_id="prompt_user",
             search_prompt=search_prompt,
-            custom_run_id=args.run_id
+            custom_run_id=args.run_id,
+            ollama_client=ollama_client,
+            searxng_client=searxng_client
         )
 
     elif active_customer_id:
@@ -359,7 +382,9 @@ def main() -> None:
             candidate=candidate,
             customer_id=customer_id,
             search_prompt=None,
-            custom_run_id=args.run_id
+            custom_run_id=args.run_id,
+            ollama_client=ollama_client,
+            searxng_client=searxng_client
         )
 
     else:
@@ -407,11 +432,14 @@ def main() -> None:
             sys.stderr.write(f"Failed to generate profile from prompt: {e}\n")
             sys.exit(1)
 
+        candidate.customer_id = "adhoc_user"
         run_pipeline(
             candidate=candidate,
             customer_id="adhoc_user",
             search_prompt=prompt_input,
-            custom_run_id=args.run_id
+            custom_run_id=args.run_id,
+            ollama_client=ollama_client,
+            searxng_client=searxng_client
         )
 
 

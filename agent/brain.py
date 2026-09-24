@@ -488,34 +488,37 @@ class AutonomousBrain:
                 })
 
         # 5. Posting Age Filter (Deterministic check before network verification)
-        fresh_jobs: List[Job] = []
+        # Filters out jobs whose timestamp is already known and exceeds max allowed age.
+        # Jobs with unknown timestamp or fresh timestamp proceed to availability verification,
+        # where the live HTML element is inspected first before falling back to timestamp.
+        candidate_jobs: List[Job] = []
         age_rejected: List[Tuple[Job, str]] = []
         for job in unique_jobs:
-            age_ok, age_reason = HardFilterEngine.matches_posting_age(job, self.mission.posting_age_days)
-            if age_ok:
-                fresh_jobs.append(job)
-                self.run_statistics["fresh"] += 1
-            else:
+            if job.posted_age_days is not None and job.posted_age_days > self.mission.posting_age_days:
                 self.run_statistics["stale"] += 1
+                age_reason = f"Posting age ({job.posted_age_days}d) exceeds maximum allowed ({self.mission.posting_age_days}d)"
                 logger.info(f"[ACT] Freshness filter rejected '{job.title}' ({job.url}): {age_reason}")
-                age_rejected.append((job, age_reason or "Exceeded max posting age"))
+                age_rejected.append((job, age_reason))
                 self.memory_tool.memory.record_job_outcome(job.url, accepted=False, reason=age_reason)
                 self.run_rejections.append({
                     "job_url": job.url,
                     "title": job.title,
                     "company": job.company,
                     "stage": "freshness",
-                    "reason": "posting_age_exceeded" if job.posted_age_days is not None else "unknown_posting_age",
+                    "reason": "posting_age_exceeded",
                     "details": {
                         "posted_age_days": job.posted_age_days,
                         "max_allowed_days": self.mission.posting_age_days,
                         "confidence": job.posting_date_confidence
                     }
                 })
+            else:
+                candidate_jobs.append(job)
 
-        # 6. Availability Verification (Probes remaining fresh jobs)
-        self.run_statistics["availability_checked"] += len(fresh_jobs)
-        verified_jobs = self.availability_verifier.verify_batch(fresh_jobs)
+        # 6. Availability Verification & HTML Date Inspection
+        # Probes candidate jobs, inspects HTML element first for posting date, falls back to timestamp
+        self.run_statistics["availability_checked"] += len(candidate_jobs)
+        verified_jobs = self.availability_verifier.verify_batch(candidate_jobs)
 
         # Track availability counts and rejections
         for job in verified_jobs:
@@ -536,14 +539,17 @@ class AutonomousBrain:
                     }
                 })
 
-        # 7. Apply Remaining Hard Filters (availability, excluded companies, locations, work modes)
+        # 7. Apply Hard Filters (freshness with HTML date, availability, excluded companies, locations, work modes)
         passed_jobs, filter_rejected = self.filter_engine.filter_batch(
             verified_jobs,
             self.mission
         )
         self.run_statistics["hard_filter_passed"] += len(passed_jobs)
+        self.run_statistics["fresh"] += len(passed_jobs)
 
         for r_job, r_reason in filter_rejected:
+            if "posting age" in r_reason.lower() or "exceeds maximum allowed" in r_reason.lower():
+                self.run_statistics["stale"] += 1
             # Avoid duplicate rejection logging if already logged in availability
             if "availability" not in r_reason.lower():
                 self.run_rejections.append({

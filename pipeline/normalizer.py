@@ -95,34 +95,26 @@ class JobNormalizer:
             candidates_to_check.append(fallback_text.lower())
 
         for text in candidates_to_check:
-            # Matches 'today', 'just posted', 'just now'
-            if re.search(r"\b(today|just posted|just now)\b", text):
-                return now_utc.isoformat(), 0, "medium"
-
-            # Matches 'X hours/mins ago'
-            if re.search(r"\b\d+\s*(?:hour|hr|minute|min)s?\s*ago\b", text):
-                return now_utc.isoformat(), 0, "medium"
-
-            # Matches 'X day(s) ago'
-            m_day = re.search(r"\b(\d+)\s*day[s]?\s*ago\b", text)
-            if m_day:
-                days = int(m_day.group(1))
-                posted_dt = now_utc - timedelta(days=days)
-                return posted_dt.isoformat(), days, "medium"
-
-            # Matches 'X week(s) ago'
-            m_week = re.search(r"\b(\d+)\s*week[s]?\s*ago\b", text)
-            if m_week:
-                weeks = int(m_week.group(1))
-                days = weeks * 7
-                posted_dt = now_utc - timedelta(days=days)
-                return posted_dt.isoformat(), days, "medium"
-
-            # Matches 'X month(s) ago'
-            m_month = re.search(r"\b(\d+)\s*month[s]?\s*ago\b", text)
-            if m_month:
-                months = int(m_month.group(1))
-                days = months * 30
+            # Matches relative phrases in order of appearance (position-based)
+            rel_pattern = r"\b(?:(today|just posted|just now)|(\d+)\s*(hour|hr|minute|min|day|week|month|year)s?\s*ago)\b"
+            m = re.search(rel_pattern, text)
+            if m:
+                if m.group(1):
+                    return now_utc.isoformat(), 0, "medium"
+                qty = int(m.group(2))
+                unit = m.group(3).lower()
+                if unit in {"hour", "hr", "minute", "min"}:
+                    days = 0
+                elif unit == "day":
+                    days = qty
+                elif unit == "week":
+                    days = qty * 7
+                elif unit == "month":
+                    days = qty * 30
+                elif unit == "year":
+                    days = qty * 365
+                else:
+                    days = qty
                 posted_dt = now_utc - timedelta(days=days)
                 return posted_dt.isoformat(), days, "medium"
 

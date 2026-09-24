@@ -127,6 +127,61 @@ class LinkedInProvider(BaseJobProvider):
         clean_parts[5] = ""  # remove fragment
         return urlunparse(clean_parts).rstrip("/")
 
+    @staticmethod
+    def is_available(job: Job) -> Tuple[bool, Optional[str]]:
+        """
+        Availability policy:
+
+        ACTIVE
+            -> accepted
+
+        UNKNOWN
+            -> accepted as unverified
+
+        CLOSED / EXPIRED / REMOVED
+            -> rejected
+
+        IMPORTANT:
+        UNKNOWN does NOT mean ACTIVE.
+        It means direct verification could not establish the status.
+
+        A fresh UNKNOWN job can continue to LLM evaluation because
+        discovery/search-engine evidence is still useful, while explicit
+        closed/removed jobs are blocked.
+        """
+
+        status = (job.availability_status or "UNKNOWN").upper()
+
+        if status in {"CLOSED", "EXPIRED", "REMOVED"}:
+            return False, f"Job availability is '{status}'"
+
+        if status == "UNKNOWN":
+            return True, (
+                "Availability could not be directly verified; "
+                "retaining fresh job for evaluation as UNVERIFIED"
+            )
+
+        if status == "ACTIVE":
+            return True, None
+
+        # Defensive handling for unexpected values.
+        return False, f"Unsupported job availability status '{status}'"
+
+    @staticmethod
+    def _extract_posting_age(
+        posted_text: Optional[str],
+        fallback_text: str = ""
+    ) -> Tuple[Optional[int], str]:
+        """
+        Extracts normalized posting age in days and confidence from raw posting text using JobNormalizer.
+        """
+        from pipeline.normalizer import JobNormalizer
+        _, age_days, confidence = JobNormalizer.parse_posting_age(
+            posted_text=posted_text,
+            fallback_text=fallback_text
+        )
+        return age_days, confidence
+
     def parse_result_detailed(
         self,
         raw_result: Dict[str, Any],
@@ -199,13 +254,49 @@ class LinkedInProvider(BaseJobProvider):
         company = company.strip("\"' ")
         location = location.strip("\"' ")
 
-        # Extract posted date string if present
-        posted_raw = raw_result.get("publishedDate") or raw_result.get("pubdate")
-        posted_text = str(posted_raw) if posted_raw is not None else None
-        if not posted_text and raw_content:
-            date_match = re.search(r"\b(\d+\s+(?:days?|weeks?|months?|hours?)\s+ago)\b", raw_content, re.IGNORECASE)
-            if date_match:
-                posted_text = date_match.group(1)
+        #Posting age extraction
+        posted_raw = (
+                raw_result.get("publishedDate")
+                or raw_result.get("pubdate")
+                or raw_result.get("published")
+                or raw_result.get("date")
+        )
+
+        posted_text = (
+            str(posted_raw).strip()
+            if posted_raw is not None
+            else None
+        )
+
+        # If SearXNG does not provide a dedicated date field,
+        # search the title + snippet for age information.
+        searchable_date_text = " ".join(
+            part for part in (
+                raw_title,
+                raw_content,
+                str(raw_result.get("metadata") or ""),
+            )
+            if part
+        )
+
+        # 1. Check HTML element first if present in content
+        html_element_date = None
+        if "<" in searchable_date_text and ">" in searchable_date_text:
+            from pipeline.availability import JobAvailabilityVerifier
+            html_element_date = JobAvailabilityVerifier.extract_html_posting_date(searchable_date_text)
+
+        if html_element_date:
+            posted_text = html_element_date
+        elif not posted_text:
+            # 2. Fall back to timestamp from search result (position-based matching)
+            rel_pattern = r"\b(?:(today|just posted|just now)|(\d+)\s*(hour|hr|minute|min|day|week|month|year)s?\s*ago)\b"
+            m = re.search(rel_pattern, searchable_date_text, re.IGNORECASE)
+            if m:
+                posted_text = m.group(0)
+
+        posted_age_days, posting_confidence = (
+            self._extract_posting_age(posted_text)
+        )
 
         try:
             job = Job(
@@ -216,6 +307,8 @@ class LinkedInProvider(BaseJobProvider):
                 url=canonical_url,
                 description=raw_content,
                 posted_text=posted_text,
+                posted_age_days=posted_age_days,
+                posting_date_confidence=posting_confidence,
                 search_query=search_query,
                 metadata={
                     "engines": raw_result.get("engines", []),
